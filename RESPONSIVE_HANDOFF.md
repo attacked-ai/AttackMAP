@@ -1,4 +1,15 @@
-# Responsiveness pass — handoff (2026-10-08 05:20: ALL AREAS FIXED AND CHECKED — waiting for the owner to test)
+# Responsiveness pass — handoff (2026-10-08 16:45: DEPLOYED — live version + responsive fixes is in production)
+
+## Production now (read first)
+
+- https://attackedmap.vercel.app = branch `cards-responsive` @dee9b2e (live design + responsive fixes + Hub picture fix), deployment
+  `attackedmap-r5miv34z9`, deployed from the clean worktree `D:/attacked-dev/wt-deploy` (owner chose this over deploying main).
+- Rollback target (previous production, Sep 29): `attackedmap-q4yarip86-mohiawrai2609s-projects.vercel.app` (`vercel promote` / `vercel rollback`).
+- Checked on the real site after deploy: 9 pages x 8 sizes, no sideways scroll, no cut text; report pages carry attacked-resp v3; map OK.
+- `main` = c72f72c (all responsive work + restyle etc.), NOT deployed. `cards-only-on-live` was NOT moved: it is now BEHIND production;
+  deploy only from `cards-responsive` (or fast-forward cards-only-on-live to it first) or production loses the fixes.
+- Open: image.pollinations.ai pictures on the live dashboard return 402 (pre-existing).
+
 
 ## Status (read this first)
 
