@@ -9,6 +9,8 @@
 - Checked on the real site after deploy: 9 pages x 8 sizes, no sideways scroll, no cut text; report pages carry attacked-resp v3; map OK.
 - `main` has all the responsive work (+ restyle etc.), NOT deployed. `cards-only-on-live` was fast-forwarded to `cards-responsive`
   (dc7953a), so deploying from wt-cards or wt-deploy gives the same production build.
+- FIXED 17:15: dashboard/map pictures no longer use image.pollinations.ai (it answers 402); stored picture, else the
+  category photo. Verified live: no failing requests on the dashboard.
 
 
 ## Status (read this first)
