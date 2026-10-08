@@ -11,6 +11,19 @@
 - Owner test list: `RESPONSIVE_TEST_CHECKLIST.md`.
 - Owner decisions still open: (1) Attack Map guided tour no longer auto-starts on screens <=500px tall in the desktop
   layout (it covered both panels); (2) dashboard filter-chip wall on phones and duplicated article summary left as is.
+- 2026-10-08 12:40 PORT TO LIVE (owner chose it): worktree `D:/attacked-dev/wt-live-resp`, new branch `cards-responsive`
+  (from cards-only-on-live; wt-cards untouched). Diff `D:/attacked-dev/resp/port.diff` applied with git apply -3: 21 conflicts in 14 files.
+  Baseline copy `D:/attacked-dev/wt-live-base` (detached, unchanged live code) on :5174, port on :5175, main on :5173.
+  Both test copies have a LOCAL-ONLY vite.config.js + scripts/dev-direct-signin.local.mjs (test sign-in): never commit those.
+  Live baseline sweep -> `D:/attacked-dev/resp/live-base` (pages file `rtools/pages-live.mjs`). Port workflow wf_5ddf2786-7e6
+  (script copy `D:/attacked-dev/resp/port_live_wf.js`). Temporary entries live-base/live-resp were added to .claude/launch.json
+  in the main checkout: remove them when done. `main` was NOT moved (the git safety check blocked it; ask the owner).
+- 2026-10-08 16:20 LIVE PORT DONE AND MEASURED: branch `cards-responsive` (commits 4e17a6c + dee9b2e, local, not pushed),
+  worktree `D:/attacked-dev/wt-live-resp` (dev server :5175). Live before -> after, 29 states x 23 sizes: sideways 31 -> 0,
+  cut text 53 -> 0, overlaps 50 -> 20 (report pill), tap<24 2656 -> 32 (sign-in checkboxes). Laptop/desktop keep the live
+  design (no restyle). Notes + deploy steps: RESPONSIVE_LIVE_PORT.md on that branch. Live baseline copy `D:/attacked-dev/wt-live-base` (:5174)
+  can be removed after the owner tests (git worktree remove). The temporary launch.json entries were removed again.
+  Separate pre-existing live issue: dashboard pictures from image.pollinations.ai now return 402 (main uses stored pictures).
 - NOT done yet (needs the owner): merge to main, port to `cards-only-on-live` (D:/attacked-dev/wt-cards), deploy.
   Deploy only when the owner says "deploy". Before any deploy/bake: `node scripts/apply-report-responsive.mjs --write`
   then `node scripts/verify-report-responsive.mjs` (public/reports is gitignored).
