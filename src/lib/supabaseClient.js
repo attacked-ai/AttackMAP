@@ -9,6 +9,13 @@
 // pagination in GlobalAttackMap.jsx — those paths are unchanged.
 // ─────────────────────────────────────────────────────────────────────────
 import { createClient } from "@supabase/supabase-js";
+// GCP backend (VITE_BACKEND=gcp): the same supabase-js data calls
+// (.from / .rpc) go to OUR PostgREST on this site's origin (/rest/v1), and the
+// reader's 1-hour token comes from our API (lib/gcpAuth.js, HttpOnly cookie
+// session). supabase.auth is not used there: sign-in goes through gcpAuth.
+// Without VITE_BACKEND the main client below is exactly the Supabase one.
+import { GCP } from "./backend";
+import { getAccessToken } from "./gcpAuth";
 
 const url = import.meta.env.VITE_SUPABASE_URL;
 const key = import.meta.env.VITE_SUPABASE_ANON_KEY;
@@ -19,14 +26,19 @@ if (!url || !key) {
   );
 }
 
-export const supabase = createClient(url || "", key || "", {
-  auth: {
-    persistSession: true,
-    autoRefreshToken: true,
-    detectSessionInUrl: true, // handles magic-link redirect
-    storageKey: "attackmap.auth",
-  },
-});
+export const supabase = GCP
+  ? createClient(url || "", key || "", {
+      accessToken: getAccessToken,
+      auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+    })
+  : createClient(url || "", key || "", {
+      auth: {
+        persistSession: true,
+        autoRefreshToken: true,
+        detectSessionInUrl: true, // handles magic-link redirect
+        storageKey: "attackmap.auth",
+      },
+    });
 
 // ─────────────────────────────────────────────────────────────────────────
 // Hub data client — the Attacked Hub (?hub) reads its incidents from a

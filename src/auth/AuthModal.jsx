@@ -22,6 +22,7 @@ import { useAuth } from "./AuthProvider";
 import { supabase } from "../lib/supabaseClient";
 import { SECTORS, ROLES } from "../lib/taxonomy";
 import { WORKOS, startHosted } from "../lib/workos";
+import { GCP } from "../lib/backend";
 
 // Light / paper palette — white + ink + strong gold brand accent.
 const C = {
@@ -100,7 +101,10 @@ const ALL_PROVIDERS = [
 const ENABLED = String((typeof import.meta !== "undefined" && import.meta.env &&
   (WORKOS ? (import.meta.env.VITE_WORKOS_PROVIDERS || "google,azure,linkedin_oidc,github") : import.meta.env.VITE_AUTH_PROVIDERS)) || "")
   .split(",").map((s) => s.trim()).filter(Boolean);
-const PROVIDERS = ENABLED.length ? ALL_PROVIDERS.filter(([id]) => ENABLED.includes(id)) : ALL_PROVIDERS;
+// GCP backend (VITE_BACKEND=gcp): our API signs people in with Google only
+// (api/app/gcp/google.py), so that is the one button.
+const PROVIDERS = GCP ? ALL_PROVIDERS.filter(([id]) => id === "google")
+  : ENABLED.length ? ALL_PROVIDERS.filter(([id]) => ENABLED.includes(id)) : ALL_PROVIDERS;
 
 // intent="subscribe": the reader pressed Subscribe while signed out. Once the
 // session exists we send them back to the subscription page with
@@ -457,8 +461,8 @@ export function AuthModal({ open, onClose, intent = null, screen = "sign-up" }) 
               {error && <div style={{ marginBottom: 12, fontSize: 12, color: C.err }}>{error}</div>}
               <button type="submit" disabled={busy} style={goldBtn(busy)}>{busy ? (usePw ? "Signing in…" : "Sending your code…") : (usePw ? "Sign in" : "Email me a code →")}</button>
             </form>
-            {/* Passwords are off with WorkOS: email code or a provider only. */}
-            {!WORKOS && <div style={{ marginTop: 16, paddingTop: 14, borderTop: `1px solid ${C.line}`, textAlign: "center" }}>
+            {/* Passwords are off with WorkOS and on the GCP backend: email code or a provider only. */}
+            {!WORKOS && !GCP && <div style={{ marginTop: 16, paddingTop: 14, borderTop: `1px solid ${C.line}`, textAlign: "center" }}>
               <button type="button" onClick={() => { setUsePw(v => !v); setError(null); }} style={{ background: "none", border: "none", cursor: "pointer", fontFamily: "Inter, sans-serif", fontSize: 12.5, color: C.ink3, padding: "8px 6px", margin: "-7px 0" }}>
                 {usePw ? <>Prefer a code? <span style={{ color: C.goldDeep, textDecoration: "underline", fontWeight: 600 }}>Email me a code instead</span></>
                        : <>Set a password earlier? <span style={{ color: C.goldDeep, textDecoration: "underline", fontWeight: 600 }}>Sign in with it</span></>}
@@ -478,7 +482,7 @@ export function AuthModal({ open, onClose, intent = null, screen = "sign-up" }) 
                   reader whose address already has an account receives a link
                   instead of a code. Say so, and make the link useful. (WorkOS
                   always sends a code, from our own template.) */}
-              {!WORKOS && <span style={{ display: "block", marginTop: 8, fontSize: 12, color: C.ink4 }}>Got a sign-in link instead of a code? That means this address already has an account — the link signs you in too and opens your dashboard.</span>}
+              {!WORKOS && !GCP && <span style={{ display: "block", marginTop: 8, fontSize: 12, color: C.ink4 }}>Got a sign-in link instead of a code? That means this address already has an account — the link signs you in too and opens your dashboard.</span>}
             </p>
             <form onSubmit={submitCode}>
               <label style={label}>Verification code</label>

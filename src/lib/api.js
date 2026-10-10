@@ -9,27 +9,32 @@
 //   • the baked reports, locked server-side  (ReportFrame → reportHtml)
 // Every helper returns null when the API is off or the reader has no session,
 // and callers fall back to the old path.
+//
+// GCP backend (VITE_BACKEND=gcp): the API is always on, at /api on this same
+// origin, and the reader is identified by the HttpOnly session cookie, so no
+// token is attached and anonymous readers use it too (reports arrive locked
+// by the server, never unlocked by the browser).
 
-import { supabase } from "./supabaseClient";
+import { GCP } from "./backend";
+import { readerToken } from "./authClient";
 
-export const API_URL = String(import.meta.env.VITE_API_URL || "").replace(/\/$/, "");
+export const API_URL = GCP ? "/api" : String(import.meta.env.VITE_API_URL || "").replace(/\/$/, "");
 export const apiEnabled = () => !!API_URL;
 
-async function sessionToken() {
-  try { const { data } = await supabase.auth.getSession(); return data?.session?.access_token || null; }
-  catch { return null; }
-}
+const sessionToken = readerToken;
 
 async function call(path, { method = "GET", body, auth = true, text = false } = {}) {
   if (!API_URL) return null;
   const headers = { Accept: text ? "text/html" : "application/json" };
   if (body !== undefined) headers["Content-Type"] = "application/json";
-  if (auth) {
+  if (GCP) {
+    headers["X-Requested-With"] = "attacked";  // the API's CSRF check; the cookie carries the session
+  } else if (auth) {
     const t = await sessionToken();
     if (!t) return null;                       // no session → caller uses the old path
     headers.Authorization = `Bearer ${t}`;
   }
-  const r = await fetch(`${API_URL}${path}`, { method, headers, body: body !== undefined ? JSON.stringify(body) : undefined });
+  const r = await fetch(`${API_URL}${path}`, { method, headers, ...(GCP ? { credentials: "same-origin" } : {}), body: body !== undefined ? JSON.stringify(body) : undefined });
   if (!r.ok) {
     let msg = `API ${r.status}`;
     try { const j = await r.json(); msg = j.detail || msg; } catch { /* not json */ }

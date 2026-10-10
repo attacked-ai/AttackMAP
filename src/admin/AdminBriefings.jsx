@@ -13,6 +13,8 @@
 // ─────────────────────────────────────────────────────────────────────────
 import React, { useEffect, useRef, useState } from "react";
 import { supabase } from "../lib/supabaseClient";
+import { GCP } from "../lib/backend";
+import { uploadMedia } from "../lib/gcpAuth";
 
 const BRAND = {
   gold: "#FCBD00",
@@ -99,6 +101,12 @@ export function AdminBriefings() {
     setUploading(true);
     setMsg(null);
     try {
+      // GCP backend: through the API into Cloud Storage (admin checked there).
+      if (GCP) {
+        setImageUrl(await uploadMedia("incident", String(sel.id), file));
+        setMsg({ type: "ok", text: "Image uploaded — remember to Save." });
+        return;
+      }
       const ext = (file.name.split(".").pop() || "jpg").toLowerCase();
       const path = `${sel._source}-${sel.id}-${Date.now()}.${ext}`;
       const { error } = await supabase.storage

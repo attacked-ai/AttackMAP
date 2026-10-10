@@ -20,6 +20,7 @@ import { supabase } from "../lib/supabaseClient";
 import { publishedReportsByIncident } from "../lib/reports";
 import { subscriberLayer } from "../lib/api";
 import { CATEGORY_NAME, SEVERITY } from "../lib/taxonomy";
+import { GCP } from "../lib/backend";
 
 // Columns without counts. Used for list rows where the counts are not shown
 // until the reader opens the incident; loadCounts() fills them in then.
@@ -200,7 +201,7 @@ export async function loadReportIndex() {
   if (reportIndex) return reportIndex;
   let baked = {};
   try {
-    const r = await fetch("/reports/manifest.json", { cache: "force-cache" });
+    const r = await fetch(GCP ? "/api/reports/manifest.json" : "/reports/manifest.json", { cache: "force-cache" });
     const m = await r.json();
     baked = (m && m.byIncident) || {};
   } catch { baked = {}; }

@@ -11,7 +11,10 @@
 //   takeReturn()                 the token a provider trip brought back (#wos_token=…)
 //   savePending / takePending    sign-up form details kept across a provider trip
 
-export const WORKOS = import.meta.env.VITE_AUTH_PROVIDER === "workos";
+// Never on the Google Cloud backend (VITE_BACKEND=gcp): there the API signs
+// people in itself (lib/gcpAuth.js) and there is no Supabase session to bridge to.
+import { GCP } from "./backend";
+export const WORKOS = import.meta.env.VITE_AUTH_PROVIDER === "workos" && !GCP;
 
 const BRIDGE = `${String(import.meta.env.VITE_SUPABASE_URL || "").replace(/\/$/, "")}/functions/v1/workos-auth`;
 

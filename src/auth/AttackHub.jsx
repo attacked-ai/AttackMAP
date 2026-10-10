@@ -23,6 +23,7 @@ import { AuthModal } from "./AuthModal";
 import { SiteNav } from "./SiteNav";
 import { SiteFooter } from "./SiteFooter";
 import { SEVERITY_INK, SEVERITY_CHIP } from "../brand.js";
+import { GCP } from "../lib/backend";
 
 const GOLD = "#FCBD00", GOLD_D = "#8A6D00", OB = "#1A1A1A";  // GOLD_D = the reference's --gold-text; 4.92:1 on white  // GOLD_D darkened from #8A6D00: on the cream ground (#F5F3ED) it measured 4.43:1, just under the 4.5 minimum for the 10px kicker labels.
 const SEV_C = { 5: "#FF3B30", 4: "#FF6B35", 3: GOLD, 2: "#34C759", 1: "#8E8E93" };
@@ -641,7 +642,7 @@ export function AttackHub() {
     (async () => {
       let baked = { refs: [], byIncident: {} };
       try {
-        const r = await fetch("/reports/manifest.json");
+        const r = await fetch(GCP ? "/api/reports/manifest.json" : "/reports/manifest.json");
         const m = r.ok ? await r.json() : null;
         if (Array.isArray(m)) baked = { refs: m, byIncident: {} };
         else if (m) baked = { refs: m.refs || Object.values(m.byIncident || {}), byIncident: m.byIncident || {} };

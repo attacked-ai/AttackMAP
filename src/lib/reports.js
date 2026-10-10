@@ -11,6 +11,8 @@
 // public/reports/) or stands alone (a daily intelligence piece).
 
 import { supabase } from "./supabaseClient";
+import { GCP } from "./backend";
+import { uploadMedia } from "./gcpAuth";
 
 const LIST_COLS = "id,ref,title,subtitle,summary,industry,primary_category,severity,incident_id,hero_image_url,author,tags,published_at,updated_at";
 
@@ -59,8 +61,10 @@ export function makeReportRef(title = "", date = new Date()) {
 }
 
 // Upload a hero picture for a report into the public incident-media bucket
-// (admin insert policy). Returns the public URL.
+// (admin insert policy). Returns the public URL. GCP backend: through the API
+// into Cloud Storage (it checks the admin tier itself).
 export async function uploadReportHero(ref, file) {
+  if (GCP) return `${await uploadMedia("report", ref, file)}?v=${Date.now()}`;
   const ext = (file.name.split(".").pop() || "jpg").toLowerCase().replace(/[^a-z0-9]/g, "") || "jpg";
   const path = `reports/${ref}.${ext}`;
   const { error } = await supabase.storage.from("incident-media").upload(path, file, { upsert: true, contentType: file.type || "image/jpeg", cacheControl: "31536000" });

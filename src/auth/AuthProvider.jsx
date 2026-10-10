@@ -23,6 +23,10 @@ import { sendCode, setSubscription } from "../lib/api";
 // (lib/workos.js, supabase/functions/workos-auth); the Supabase session, the
 // profile row and the tiers stay exactly as they are.
 import { WORKOS, emailStart, emailVerify, startProvider, takeReturn, savePending, takePending } from "../lib/workos";
+// VITE_BACKEND=gcp: our API signs people in (lib/gcpAuth.js, HttpOnly cookie
+// session) and supabase.auth is not used. Off (the default), nothing changes.
+import { GCP } from "../lib/backend";
+import * as gcpAuth from "../lib/gcpAuth";
 
 const AuthContext = createContext({
   user: null,
@@ -104,6 +108,30 @@ export function AuthProvider({ children }) {
   useEffect(() => {
     let cancelled = false;
 
+    // GCP backend: the session comes from our API, and changes arrive through
+    // gcpAuth.onChange instead of supabase.auth.
+    if (GCP) {
+      const apply = async (sessionUser) => {
+        setUser(sessionUser);
+        if (!sessionUser) { setProfile(null); return; }
+        const p = await fetchProfile(sessionUser.id);
+        if (!cancelled) setProfile(p);
+      };
+      (async () => {
+        try {
+          const s = await gcpAuth.getSession();
+          if (!cancelled) await apply(s?.user || null);
+        } catch (e) {
+          console.warn("[Auth] session check failed:", e?.message || e);
+        } finally {
+          // Always: a failed check must not leave every gated page on "Loading…".
+          if (!cancelled) setLoading(false);
+        }
+      })();
+      const off = gcpAuth.onChange((s) => { apply(s?.user || null); });
+      return () => { cancelled = true; off(); };
+    }
+
     (async () => {
       await finishReturnTrip();   // a WorkOS provider trip, before anything reads the session
       const { data } = await supabase.auth.getSession();
@@ -150,6 +178,8 @@ export function AuthProvider({ children }) {
   // production build with no dashboard). The origin must be allow-listed under
   // Authentication → URL configuration → Redirect URLs.
   const signIn = useCallback(async (email, meta = null) => {
+    // GCP: our API emails the code (Resend) and holds it; nothing else to try.
+    if (GCP) { await gcpAuth.emailStart(String(email || "").trim().toLowerCase(), meta); return; }
     // WorkOS: it makes the code and workos-auth emails it (Attacked.ai template).
     // The sign-up answers are saved onto the profile after the code (AuthModal).
     if (WORKOS) { await emailStart(String(email || "").trim().toLowerCase()); return; }
@@ -180,6 +210,14 @@ export function AuthProvider({ children }) {
   // WorkOS: a full-page trip through workos-auth to the provider and back;
   // `pending` (the sign-up form, if filled) is saved once the reader returns.
   const signInWithProvider = useCallback(async (provider, redirectTo, pending = null) => {
+    if (GCP) {
+      // GCP: Google only, through our API (it sets the HttpOnly session cookie).
+      if (provider !== "google") throw new Error("That sign-in option is not switched on.");
+      let back = "/?dashboard";
+      try { if (redirectTo) { const u = new URL(redirectTo, window.location.origin); back = `${u.pathname}${u.search}`; } } catch { /* keep default */ }
+      gcpAuth.googleStart(back);
+      return;
+    }
     if (WORKOS) {
       if (pending) savePending(pending);
       startProvider(provider, redirectTo);
@@ -202,6 +240,7 @@ export function AuthProvider({ children }) {
   // an empty identities array. Surface it as a typed error so the modal can
   // route to sign-in instead of stranding the reader on an empty code screen.
   const signUpWithPassword = useCallback(async (email, password, meta = {}) => {
+    if (GCP) throw new Error("Passwords are not used any more. Use an email code or Google.");
     const { data, error } = await supabase.auth.signUp({
       email: String(email || "").trim().toLowerCase(),
       password,
@@ -218,6 +257,7 @@ export function AuthProvider({ children }) {
 
   // Returning user — email + password.
   const signInWithPassword = useCallback(async (email, password) => {
+    if (GCP) throw new Error("Passwords are not used any more. Use an email code or Google.");
     const { error } = await supabase.auth.signInWithPassword({
       email: String(email || "").trim().toLowerCase(),
       password,
@@ -244,6 +284,8 @@ export function AuthProvider({ children }) {
   const verifyCode = useCallback(async (email, token, type = "email") => {
     const em = String(email || "").trim().toLowerCase();
     const raw = String(token || "").replace(/\D/g, "");
+    // GCP: one call; the API forgives a lost leading zero and sets the cookie.
+    if (GCP) return gcpAuth.emailVerify(em, raw);
     // WorkOS checks the code; workos-auth answers with a one-time Supabase token.
     if (WORKOS) {
       const t = await emailVerify(em, raw);
@@ -264,14 +306,20 @@ export function AuthProvider({ children }) {
     throw firstError;
   }, []);
 
+  // The signed-in reader's id, on either backend.
+  const currentUid = useCallback(async () => {
+    if (GCP) return (await gcpAuth.getSession())?.user?.id || null;
+    const { data: u } = await supabase.auth.getUser();
+    return u?.user?.id || null;
+  }, []);
+
   // Persist the signup form basics onto the profile row. identity.profiles has
   // an own-row UPDATE policy, so this writes only the caller's row. Best-effort
   // — never blocks the sign-in. Returns { profile } on success, { error }
   // otherwise, for callers that need to know (WorkOS "One last step").
   const saveProfileBasics = useCallback(async (fields) => {
     try {
-      const { data: u } = await supabase.auth.getUser();
-      const uid = u?.user?.id;
+      const uid = await currentUid();
       if (!uid) return { error: "You're not signed in." };
       const { error } = await supabase.from("profiles").update(fields).eq("id", uid);
       if (error) { console.warn("[Auth] profile basics save failed:", error.message); return { error: "Could not save. Try again." }; }
@@ -282,18 +330,25 @@ export function AuthProvider({ children }) {
       console.warn("[Auth] profile basics save failed:", err?.message);
       return { error: "Could not save. Try again." };
     }
-  }, []);
+  }, [currentUid]);
 
   // Upload a profile picture to the `avatars` storage bucket, then persist its
   // public URL on profiles.avatar_url. Returns { url } on success or { error }.
   const uploadAvatar = useCallback(async (file) => {
     try {
-      const { data: u } = await supabase.auth.getUser();
-      const uid = u?.user?.id;
+      const uid = await currentUid();
       if (!uid) return { error: "You're not signed in." };
       if (!file) return { error: "No file selected." };
       if (!/^image\//.test(file.type)) return { error: "Please choose an image file." };
       if (file.size > 5 * 1024 * 1024) return { error: "Image must be under 5 MB." };
+
+      // GCP: the API stores it in Cloud Storage and saves avatar_url itself.
+      if (GCP) {
+        const r = await gcpAuth.uploadAvatar(file);
+        if (r.error) return r;
+        setProfile(await fetchProfile(uid));
+        return { url: r.url };
+      }
 
       const ext = (file.name.split(".").pop() || "png").toLowerCase().replace(/[^a-z0-9]/g, "");
       const path = `${uid}.${ext || "png"}`;
@@ -315,9 +370,10 @@ export function AuthProvider({ children }) {
     } catch (err) {
       return { error: err?.message || "Upload failed." };
     }
-  }, []);
+  }, [currentUid]);
 
   const signOut = useCallback(async () => {
+    if (GCP) { await gcpAuth.logout(); return; }
     await supabase.auth.signOut();
   }, []);
 
