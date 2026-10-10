@@ -24,12 +24,22 @@
 // loads everything above the serve call under Node.
 //
 // Email-safe: pure <table> layout, inline styles, absolute image URLs.
+//
+// ── 2026-09-30 · portable to Cloud Run ──────────────────────────────────────
+//   • Callers must be internal: x-internal-token or the service-role key
+//     (_shared/auth.ts). Before, anyone could POST a user_id and have that
+//     account mailed, or read its address back from a dry run.
+//   • Mail goes through _shared/mail.ts: Resend when RESEND_API_KEY is set,
+//     else Gmail SMTP (GMAIL_USER + GMAIL_APP_PASSWORD, SENDER_NAME) as before.
+//   • user_id must be a UUID; a profile without an unsubscribe token gets the
+//     Configure alerts link instead of "?unsubscribe=null".
+//   • Listens on env PORT when set (Cloud Run), else Deno's default 8000.
+// On Google Cloud the trigger's net.http_post is queued in the outbox and the
+// API delivers it here (deploy/gcp/functions/README.md).
 
-import { SMTPClient } from "https://deno.land/x/denomailer@1.6.0/mod.ts";
+import { idemKey, mailProvider, mailSetupError, sendMail } from "../_shared/mail.ts";
+import { requireInternal } from "../_shared/auth.ts";
 
-const GMAIL_USER         = Deno.env.get("GMAIL_USER")         ?? "";
-const GMAIL_APP_PASSWORD = Deno.env.get("GMAIL_APP_PASSWORD") ?? "";
-const SENDER_NAME        = Deno.env.get("SENDER_NAME")        ?? "Attacked.ai";
 const APP_URL            = Deno.env.get("APP_URL")            ?? "https://attackedmap.vercel.app";
 const SUPABASE_URL       = Deno.env.get("SUPABASE_URL")       ?? "https://ovenyjguhkgiceddzwna.supabase.co";
 const SERVICE_KEY        = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
@@ -303,17 +313,18 @@ async function firstBriefIncidents(industry: string): Promise<any[]> {
   return await pgFetch(`incidents?select=${cols}&incident_day=eq.${latestDay}&latitude=not.is.null&order=severity.desc.nullslast,id.desc&limit=3`);
 }
 
-async function createSmtpClient() {
-  if (!GMAIL_USER || !GMAIL_APP_PASSWORD) throw new Error("GMAIL creds missing");
-  return new SMTPClient({ connection: { hostname: "smtp.gmail.com", port: 465, tls: true, auth: { username: GMAIL_USER, password: GMAIL_APP_PASSWORD } } });
-}
-
 const PROFILE_COLS = "email,full_name,industry,tier,watch_categories,digest_frequency,unsubscribe_token";
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-Deno.serve(async (req) => {
+Deno.serve({ port: Number(Deno.env.get("PORT")) || 8000 }, async (req) => {
+  const denied = await requireInternal(req);
+  if (denied) return denied;
+
   let userId: string | null = null; let dryRun = false;
   try { const body = await req.json().catch(() => ({})); userId = body?.user_id ?? null; dryRun = body?.dryRun === true; } catch { /* noop */ }
   if (!userId) return new Response(JSON.stringify({ ok: false, error: "user_id required" }), { status: 400, headers: { "Content-Type": "application/json" } });
+  // user_id goes into the PostgREST filter below, so only a real UUID passes.
+  if (!UUID_RE.test(String(userId))) return new Response(JSON.stringify({ ok: false, error: "user_id must be a UUID" }), { status: 400, headers: { "Content-Type": "application/json" } });
 
   // min_severity arrives with migration 20260922_brief_prefs.sql; the fallback
   // select keeps the welcome alive until it is applied.
@@ -327,7 +338,9 @@ Deno.serve(async (req) => {
   try { incidents = await firstBriefIncidents(String(profile.industry || "").trim()); }
   catch (err) { console.warn("[welcome-email] incidents unavailable:", (err as Error)?.message); }
 
-  const unsubUrl = `${APP_URL}/?unsubscribe=${profile.unsubscribe_token}`;
+  const unsubUrl = profile.unsubscribe_token
+    ? `${APP_URL}/?unsubscribe=${encodeURIComponent(String(profile.unsubscribe_token))}`
+    : ALERTS_URL;
   const html = welcomeHtml(profile, incidents, unsubUrl);
   const subject = welcomeSubject(profile);
 
@@ -336,23 +349,13 @@ Deno.serve(async (req) => {
       { headers: { "Content-Type": "application/json" } });
   }
 
-  let client: SMTPClient;
-  try { client = await createSmtpClient(); }
-  catch (err) { return new Response(JSON.stringify({ ok: false, error: (err as Error).message }), { status: 500, headers: { "Content-Type": "application/json" } }); }
+  const setupError = mailSetupError();
+  if (setupError) return new Response(JSON.stringify({ ok: false, error: setupError }), { status: 500, headers: { "Content-Type": "application/json" } });
 
-  try {
-    await client.send({
-      from: `${SENDER_NAME} <${GMAIL_USER}>`,
-      to: profile.email,
-      subject,
-      content: "This email is best viewed in an HTML-capable client.",
-      html,
-    });
-  } catch (err) {
-    try { await client.close(); } catch { /* noop */ }
-    return new Response(JSON.stringify({ ok: false, error: (err as Error).message }), { status: 500, headers: { "Content-Type": "application/json" } });
-  }
-  try { await client.close(); } catch { /* noop */ }
+  // Keyed on the user and the email itself: the trigger (or the GCP outbox) retrying
+  // after a timeout cannot deliver the same welcome twice.
+  const res = await sendMail({ to: profile.email, subject, html, idempotencyKey: await idemKey("welcome-email", userId, subject, html) });
+  if (!res.ok) return new Response(JSON.stringify({ ok: false, provider: res.provider, error: res.error }), { status: 500, headers: { "Content-Type": "application/json" } });
 
-  return new Response(JSON.stringify({ ok: true, provider: "gmail-smtp", to: profile.email, industry: profile.industry, incidents: incidents.length }), { headers: { "Content-Type": "application/json" } });
+  return new Response(JSON.stringify({ ok: true, provider: mailProvider(), to: profile.email, industry: profile.industry, incidents: incidents.length }), { headers: { "Content-Type": "application/json" } });
 });

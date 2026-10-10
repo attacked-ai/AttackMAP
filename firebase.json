@@ -1,0 +1,57 @@
+{
+  "hosting": {
+    "public": "dist",
+    "ignore": [
+      "firebase.json",
+      "**/.*",
+      "**/node_modules/**",
+      "dev-session.json",
+      "reports/*.html",
+      "sweeps/**",
+      "hub-*.html",
+      "explainer.md"
+    ],
+    "rewrites": [
+      { "source": "/api/**", "run": { "serviceId": "attacked-api", "region": "asia-south1" } },
+      { "source": "/rest/v1/**", "run": { "serviceId": "attacked-data", "region": "asia-south1" } },
+      { "source": "/storage/v1/**", "run": { "serviceId": "attacked-data", "region": "asia-south1" } }
+    ],
+    "headers": [
+      {
+        "source": "**",
+        "headers": [
+          { "key": "Strict-Transport-Security", "value": "max-age=31536000; includeSubDomains" },
+          { "key": "X-Content-Type-Options", "value": "nosniff" },
+          { "key": "X-Frame-Options", "value": "SAMEORIGIN" },
+          { "key": "Referrer-Policy", "value": "strict-origin-when-cross-origin" },
+          { "key": "Permissions-Policy", "value": "camera=(), microphone=(), geolocation=(), payment=(), usb=()" },
+          { "key": "Content-Security-Policy-Report-Only", "value": "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob: https://images.unsplash.com https://services.arcgisonline.com https://*.arcgisonline.com https://cdnjs.cloudflare.com https://storage.googleapis.com https://lh3.googleusercontent.com; connect-src 'self' https://services.arcgisonline.com https://*.arcgisonline.com https://cdnjs.cloudflare.com; worker-src 'self' blob:; child-src 'self' blob:; frame-src 'self' https://www.youtube-nocookie.com; frame-ancestors 'self'; object-src 'none'; base-uri 'self'; form-action 'self'" }
+        ]
+      },
+      {
+        "source": "/assets/**",
+        "headers": [{ "key": "Cache-Control", "value": "public, max-age=31536000, immutable" }]
+      },
+      {
+        "source": "/@(fonts|incidents|textures)/**",
+        "headers": [{ "key": "Cache-Control", "value": "public, max-age=2592000, stale-while-revalidate=86400" }]
+      },
+      {
+        "source": "/reports/manifest.json",
+        "headers": [{ "key": "Cache-Control", "value": "public, max-age=3600, stale-while-revalidate=86400" }]
+      },
+      {
+        "source": "/@(admin1_states.json|favicon.svg|attacked-ai-logo.png|email-hero-digest.png|email-hero-welcome.png|email-hero-auth.png)",
+        "headers": [{ "key": "Cache-Control", "value": "public, max-age=86400, stale-while-revalidate=604800" }]
+      },
+      {
+        "source": "/",
+        "headers": [{ "key": "Cache-Control", "value": "no-cache" }]
+      },
+      {
+        "source": "/index.html",
+        "headers": [{ "key": "Cache-Control", "value": "no-cache" }]
+      }
+    ]
+  }
+}

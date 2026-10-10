@@ -1,0 +1,25 @@
+# What `gcloud builds submit` uploads to Cloud Build. Same idea as .gitignore:
+# never secrets, never local build output, never the unlocked reports.
+.git
+.gitignore
+.gcloudignore
+node_modules/
+dist/
+.vite/
+.vercel/
+.env
+.env.*
+!.env.example
+api/.env
+api/venv/
+api/.venv/
+**/__pycache__/
+**/*.pyc
+public/reports/*.html
+public/sweeps/
+deploy/gcp/config.env
+*.BACKUP*
+*.bak
+*.docx
+*.xlsx
+*.csv

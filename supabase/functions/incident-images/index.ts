@@ -10,7 +10,8 @@
 //   2. generate a 16:9 picture (pollinations.ai, seeded by the incident id so
 //      a re-run gives the same picture)
 //   3. crop the generator's watermark strip off the bottom, re-encode as JPEG
-//   4. upload to Storage: incident-media/incidents/<id>.jpg (public bucket)
+//   4. upload incidents/<id>.jpg: Supabase Storage bucket incident-media
+//      (public), or on Google Cloud the Cloud Storage bucket GCS_BUCKET_MEDIA
 //   5. write image_url / image_source / image_credit / image_prompt /
 //      image_updated_at on the row (service role, through the public view)
 //
@@ -25,12 +26,17 @@
 //                                     backfill run several workers in parallel
 //                                     without two of them doing the same row
 //   POST { "dryRun": true }         → prompts only, nothing generated/written
-// Scheduled by pg_cron every 10 minutes (see the migration) so a new sweep is
-// illustrated within the hour. Bounded by TIME_BUDGET_MS per call.
+// Meant to run every 10 minutes (pg_cron, commented out in the migration; Cloud
+// Scheduler on Google Cloud) so a new sweep is illustrated within the hour.
+// Bounded by TIME_BUDGET_MS per call. Callers must be internal: x-internal-token
+// or the service-role key (_shared/auth.ts).
 //
-// Env: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY (both present on the project).
+// Env: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY (both present on Supabase).
+// Google Cloud: GCS_BUCKET_MEDIA (+ optional PUBLIC_MEDIA_BASE), see upload().
+// Listens on env PORT when set (Cloud Run), else Deno's default 8000.
 
 import { Image } from "https://deno.land/x/imagescript@1.2.15/mod.ts";
+import { requireInternal } from "../_shared/auth.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "https://ovenyjguhkgiceddzwna.supabase.co";
 const SERVICE_KEY  = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
@@ -166,8 +172,41 @@ async function cropAndEncode(bytes: Uint8Array): Promise<{ jpeg: Uint8Array; wid
   }
 }
 
+// Google Cloud: with GCS_BUCKET_MEDIA set the picture goes to Cloud Storage
+// instead (JSON API media upload), as the Cloud Run service account: its token
+// comes from the metadata server. The account needs roles/storage.objectUser on
+// the bucket (a redone picture overwrites <id>.jpg, which objectCreator cannot).
+// The bucket is publicly readable, so the stored URL is
+// <PUBLIC_MEDIA_BASE>/<bucket>/<path> (default https://storage.googleapis.com),
+// the same shape the API's uploads and the data service's old-link redirect use.
+const GCS_BUCKET = (Deno.env.get("GCS_BUCKET_MEDIA") ?? "").trim();
+const MEDIA_BASE = (Deno.env.get("PUBLIC_MEDIA_BASE") ?? "").trim().replace(/\/+$/, "") || "https://storage.googleapis.com";
+const METADATA_TOKEN_URL = "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token";
+let gcsToken: { value: string; until: number } | null = null;
+
+async function metadataToken(): Promise<string> {
+  if (gcsToken && gcsToken.until > Date.now() + 60_000) return gcsToken.value;
+  const r = await fetch(METADATA_TOKEN_URL, { headers: { "Metadata-Flavor": "Google" } });
+  if (!r.ok) throw new Error(`metadata token ${r.status}`);
+  const j = await r.json();
+  gcsToken = { value: String(j.access_token), until: Date.now() + (Number(j.expires_in) || 300) * 1000 };
+  return gcsToken.value;
+}
+
+async function uploadGcs(path: string, jpeg: Uint8Array): Promise<string> {
+  const r = await fetch(`https://storage.googleapis.com/upload/storage/v1/b/${encodeURIComponent(GCS_BUCKET)}/o?uploadType=media&name=${encodeURIComponent(path)}`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${await metadataToken()}`, "Content-Type": "image/jpeg" },
+    body: jpeg,
+  });
+  if (!r.ok) throw new Error(`gcs ${r.status}: ${(await r.text()).slice(0, 300)}`);
+  // ?v= as on Supabase: a redone picture keeps its name, so the query busts caches.
+  return `${MEDIA_BASE}/${GCS_BUCKET}/${path}?v=${Date.now()}`;
+}
+
 async function upload(id: number, jpeg: Uint8Array): Promise<string> {
   const path = `${FOLDER}/${id}.jpg`;
+  if (GCS_BUCKET) return await uploadGcs(path, jpeg);
   const r = await fetch(`${SUPABASE_URL}/storage/v1/object/${BUCKET}/${path}`, {
     method: "POST",
     headers: { ...H, "Content-Type": "image/jpeg", "x-upsert": "true", "Cache-Control": "public, max-age=31536000" },
@@ -195,7 +234,9 @@ async function illustrate(i: any) {
   return { id, url, bytes: jpeg.length, width, height, cropped };
 }
 
-Deno.serve(async (req) => {
+Deno.serve({ port: Number(Deno.env.get("PORT")) || 8000 }, async (req) => {
+  const denied = await requireInternal(req);
+  if (denied) return denied;
   if (!SERVICE_KEY) return new Response(JSON.stringify({ ok: false, error: "SUPABASE_SERVICE_ROLE_KEY missing" }), { status: 500, headers: { "Content-Type": "application/json" } });
   let body: any = {};
   try { if (req.method === "POST") body = await req.json().catch(() => ({})); } catch { /* noop */ }

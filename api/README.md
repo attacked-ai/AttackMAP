@@ -29,11 +29,13 @@ breaks before the API is deployed.
 
 ## Deploy
 
-Any small host that runs a Python process: Render / Railway / Fly.io
-(`uvicorn app.main:app --host 0.0.0.0 --port $PORT`), or Vercel serverless.
-Set the variables from `.env.example`; add the production origin to
-`ALLOWED_ORIGINS`. Give the API `REPORTS_DIR` with the 310 report files (they
-are not in git).
+Google Cloud Run, with `BACKEND=gcp`: `Dockerfile` here, the rest in
+`deploy/gcp/` (setup.sh, cloudbuild.yaml, README.md). On GCP this service also
+signs people in (Google + emailed code via Resend), holds the 30-day HttpOnly
+sessions, takes uploads to Cloud Storage and runs the scheduled jobs. The
+report files come from a private Cloud Storage bucket mounted at `REPORTS_DIR`.
+
+Tests (GCP backend, against a local PostgreSQL 17): `python -m pytest -q`.
 
 ## Phases
 

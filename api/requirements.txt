@@ -4,3 +4,7 @@ httpx==0.28.1
 PyJWT[crypto]==2.10.1
 pydantic-settings==2.7.1
 python-dotenv==1.0.1
+# GCP backend (BACKEND=gcp): Cloud SQL, Cloud Storage, multipart uploads
+asyncpg==0.30.0
+google-cloud-storage==2.19.0
+python-multipart==0.0.20

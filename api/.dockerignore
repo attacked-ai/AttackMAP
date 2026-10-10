@@ -1,0 +1,11 @@
+# Never send secrets or local state into the image build.
+.env
+.env.*
+!.env.example
+__pycache__/
+**/__pycache__/
+*.pyc
+.pytest_cache/
+tests/
+.venv/
+venv/

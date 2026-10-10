@@ -1,45 +1,73 @@
-"""Attacked.ai API — FastAPI in front of the Supabase database.
+"""Attacked.ai API — FastAPI in front of the database.
 
-Supabase Auth stays the identity provider; this service verifies its tokens
-and owns everything that must not be decided in the browser: who may read the
-subscriber layer, the report lock, subscription switching, and the sweeper's
-write path. Public reads (incident lists, map dots) stay on PostgREST.
+BACKEND=supabase (today): beside Supabase. Supabase Auth issues the tokens;
+this service owns what must not be decided in the browser: who may read the
+subscriber layer, the report lock, subscription switching, the sweeper's write
+path and the sign-in code email.
+
+BACKEND=gcp: on Google Cloud (deploy/gcp/README.md). Everything is served under
+/api, because Firebase Hosting forwards https://<site>/api/** to this service.
+On top of the routes above it signs people in (Google, emailed code), holds
+their sessions, takes uploads to Cloud Storage and runs the scheduled jobs.
 
 Run locally:   uvicorn app.main:app --reload --port 8000   (from api/)
-Docs:          http://localhost:8000/docs
+Docs:          http://localhost:8000/docs  (local only; off in production)
 """
 from __future__ import annotations
 
-from fastapi import FastAPI
+from contextlib import asynccontextmanager
+
+from fastapi import APIRouter, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .config import settings
-from .routers import auth_code, incidents, ingest, me, reports, subscription
-
-app = FastAPI(title="Attacked.ai API", version="0.1.0", docs_url="/docs", redoc_url=None)
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=settings.origins,
-    allow_credentials=False,
-    allow_methods=["GET", "POST", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "x-ingest-token"],
-)
-
-app.include_router(auth_code.router)
-app.include_router(me.router)
-app.include_router(incidents.router)
-app.include_router(subscription.router)
-app.include_router(reports.router)
-app.include_router(ingest.router)
+from .routers import incidents, ingest, me, reports, subscription
 
 
-@app.get("/health", tags=["ops"])
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    yield
+    from . import db
+    if db._client is not None:
+        await db._client.aclose()
+    if settings.gcp:
+        from .gcp import pg
+        await pg.close()
+
+
+local = settings.env == "local"
+app = FastAPI(title="Attacked.ai API", version="0.2.0", lifespan=lifespan,
+              docs_url="/docs" if local else None, redoc_url=None, openapi_url="/openapi.json" if local else None)
+
+# Browsers only need CORS in local development (Vite on :5173 calling :8000).
+# On GCP the site and the API share an origin, so production needs none.
+if local or not settings.gcp:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.origins,
+        allow_credentials=settings.gcp,
+        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_headers=["Authorization", "Content-Type", "X-Requested-With"],
+    )
+
+api = APIRouter(prefix="/api" if settings.gcp else "")
+for r in (me.router, incidents.router, subscription.router, reports.router, ingest.router):
+    api.include_router(r)
+
+if settings.gcp:
+    from .routers import gcp_auth, gcp_jobs, gcp_uploads
+    api.include_router(gcp_auth.router)
+    api.include_router(gcp_jobs.router)
+    api.include_router(gcp_uploads.router)
+else:
+    from .routers import auth_code
+    api.include_router(auth_code.router)
+
+
+@api.get("/health", tags=["ops"])
 async def health():
-    return {
-        "ok": True,
-        "supabase": settings.supabase_url,
-        "server_key": bool(settings.server_key),
-        "ingest": bool(settings.ingest_token),
-        "code_email": bool(settings.gmail_user and settings.gmail_app_password),
-    }
+    """Liveness only. Configuration is not reported to the public."""
+    return {"ok": True, "backend": settings.backend}
+
+
+app.include_router(api)

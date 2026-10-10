@@ -1,5 +1,16 @@
-// daily-digest — Supabase Edge Function (Gmail SMTP backend)
+// daily-digest — Supabase Edge Function, also run as a Cloud Run service
 // Sends the personalised daily brief to every email_subscribed=true profile.
+//
+// ── v18 · PORTABLE (2026-09-30) ─────────────────────────────────────────────
+//   • Callers must be internal: x-internal-token or the service-role key
+//     (_shared/auth.ts). The gate runs first, so a dry run — which lists every
+//     reader's address — only ever answers an internal caller.
+//   • Mail goes through _shared/mail.ts: Resend when RESEND_API_KEY is set,
+//     else Gmail SMTP as before. Each message carries an Idempotency-Key.
+//   • List-Unsubscribe on every brief (see unsubscribeHeaders); a reader with
+//     no unsubscribe_token is skipped instead of getting "?unsubscribe=null".
+//   • "day" must be YYYY-MM-DD (it goes into a PostgREST filter).
+//   • Listens on env PORT when set (Cloud Run), else Deno's default 8000.
 //
 // ── v17 · INDUSTRY-LED (2026-09-22) ─────────────────────────────────────────
 // One brief, two depths. Every reader's mail is built from four preferences
@@ -58,14 +69,18 @@
 // PREVIEWS: scripts/render-email-templates.mjs loads everything above the
 // serve call under Node and renders both tiers against live incidents.
 //
-// EMAIL BACKEND: Gmail SMTP (denomailer). Env: GMAIL_USER, GMAIL_APP_PASSWORD.
-// Triggered by pg_cron daily at 08:00 UTC + event-driven on new sweep upload.
+// EMAIL BACKEND: _shared/mail.ts. Env: RESEND_API_KEY + MAIL_FROM, or the
+// Gmail fallback GMAIL_USER + GMAIL_APP_PASSWORD (+ SENDER_NAME).
+// Trigger: daily at 08:00 UTC (a pg_cron job on Supabase, currently inactive;
+// Cloud Scheduler on Google Cloud). See deploy/gcp/functions/README.md.
+//
+// The preview renderer drops the two _shared imports below along with
+// everything from the serve call on; keep sendMail/requireInternal out of the
+// rendering code above it.
 
-import { SMTPClient } from "https://deno.land/x/denomailer@1.6.0/mod.ts";
+import { idemKey, mailProvider, mailSetupError, sendMail } from "../_shared/mail.ts";
+import { requireInternal } from "../_shared/auth.ts";
 
-const GMAIL_USER         = Deno.env.get("GMAIL_USER")         ?? "";
-const GMAIL_APP_PASSWORD = Deno.env.get("GMAIL_APP_PASSWORD") ?? "";
-const SENDER_NAME        = Deno.env.get("SENDER_NAME")        ?? "Attacked.ai";
 const APP_URL            = Deno.env.get("APP_URL")            ?? "https://attackedmap.vercel.app";
 const SUPABASE_URL       = Deno.env.get("SUPABASE_URL")       ?? "https://ovenyjguhkgiceddzwna.supabase.co";
 const SERVICE_KEY        = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
@@ -120,6 +135,21 @@ const ALERTS_URL    = `${APP_URL}/?subscriptions`;
 const SUBSCRIBE_URL = `${APP_URL}/?subscribe`;
 const DASHBOARD_URL = `${APP_URL}/?dashboard`;
 const MAP_URL       = `${APP_URL}/?map`;
+const unsubscribeUrl = (token: unknown) => `${APP_URL}/?unsubscribe=${encodeURIComponent(String(token))}`;
+
+// List-Unsubscribe gives mail clients their own "Unsubscribe" button. The
+// one-click form (RFC 8058, List-Unsubscribe-Post) has the client POST to the
+// link with no page in between, so it is only advertised when env
+// UNSUBSCRIBE_POST_URL names an endpoint that unsubscribes on a POST (the token
+// is appended to it). The ?unsubscribe= link is a browser page: a POST to it
+// would unsubscribe nobody, so on its own it is offered as a plain link.
+function unsubscribeHeaders(token: unknown): Record<string, string> {
+  const post = (Deno.env.get("UNSUBSCRIBE_POST_URL") ?? "").trim();
+  if (post) {
+    return { "List-Unsubscribe": `<${post}${encodeURIComponent(String(token))}>`, "List-Unsubscribe-Post": "List-Unsubscribe=One-Click" };
+  }
+  return { "List-Unsubscribe": `<${unsubscribeUrl(token)}>` };
+}
 
 function escape(s: unknown): string {
   return String(s ?? "").replace(/[&<>\"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c as string] || c));
@@ -615,7 +645,9 @@ function partnerDigestHtml(part: Partition, layer: Layer, unsubUrl: string) { re
 function buildForProfile(p: any, dayIncidents: any[], weekIncidents: any[], targetDay: string, weekStart: string, layer: Layer = EMPTY_LAYER) {
   const part = partitionForProfile(p, dayIncidents, weekIncidents, targetDay, weekStart);
   const tier: "free" | "subscriber" = part.prefs.isSubscriber ? "subscriber" : "free";
-  const unsubUrl = `${APP_URL}/?unsubscribe=${p.unsubscribe_token}`;
+  // No token ⇒ no working unsubscribe link. Such a reader is never sent a brief
+  // (see the send loop); a dry run still renders one, pointing at Configure alerts.
+  const unsubUrl = p.unsubscribe_token ? unsubscribeUrl(p.unsubscribe_token) : ALERTS_URL;
   const html = tier === "subscriber" ? partnerDigestHtml(part, layer, unsubUrl) : freeDigestHtml(part, layer, unsubUrl);
   const empty = part.mine.length === 0 && part.weekMine.length === 0 && part.elsewhere.length === 0;
   return {
@@ -674,36 +706,14 @@ async function loadLayer(ids: number[]): Promise<Layer> {
   return makeLayer({ blast_radius, adaptive_controls, peer_watchlist, sources });
 }
 
-async function createSmtpClient() {
-  if (!GMAIL_USER || !GMAIL_APP_PASSWORD) {
-    throw new Error("GMAIL_USER and GMAIL_APP_PASSWORD env vars are required");
-  }
-  return new SMTPClient({
-    connection: {
-      hostname: "smtp.gmail.com",
-      port: 465,
-      tls: true,
-      auth: { username: GMAIL_USER, password: GMAIL_APP_PASSWORD },
-    },
-  });
-}
+const jsonResponse = (body: unknown, status = 200) =>
+  new Response(JSON.stringify(body, null, 2), { status, headers: { "Content-Type": "application/json" } });
 
-async function sendOne(client: SMTPClient, to: string, subject: string, html: string) {
-  try {
-    await client.send({
-      from: `${SENDER_NAME} <${GMAIL_USER}>`,
-      to,
-      subject,
-      content: "This email is best viewed in an HTML-capable client.",
-      html,
-    });
-    return { ok: true };
-  } catch (err) {
-    return { ok: false, error: (err as Error)?.message || String(err) };
-  }
-}
+Deno.serve({ port: Number(Deno.env.get("PORT")) || 8000 }, async (req) => {
+  // Machines only, and before anything else: a dry run lists reader addresses.
+  const denied = await requireInternal(req);
+  if (denied) return denied;
 
-Deno.serve(async (req) => {
   let body: any = {};
   try {
     if (req.method === "POST") body = await req.json().catch(() => ({}));
@@ -719,6 +729,10 @@ Deno.serve(async (req) => {
   } catch { /* noop */ }
 
   const targetDay: string = body?.day || yesterdayISO();
+  // targetDay is written into the PostgREST filter below, so only a real date passes.
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(targetDay) || Number.isNaN(Date.parse(`${targetDay}T00:00:00Z`))) {
+    return jsonResponse({ ok: false, error: "day must be YYYY-MM-DD" }, 400);
+  }
   const weekStart = addDaysISO(targetDay, -6);
   const onlyTo: string | null = body?.to || null;
   const dryRun: boolean = body?.dryRun === true;
@@ -756,6 +770,7 @@ Deno.serve(async (req) => {
   catch (err) { console.warn("[daily-digest] layer load failed, subscriber cards render without rows:", (err as Error)?.message); }
 
   // ── Dry run: partition + render, send nothing ──────────────────────────────
+  // Lists every reader's address; only internal callers get this far (see the gate).
   if (dryRun) {
     const report = profiles.map((p) => {
       const b = buildForProfile(p, dayIncidents, weekIncidents, targetDay, weekStart, layer);
@@ -764,25 +779,20 @@ Deno.serve(async (req) => {
         email: p.email, tier: p.tier, frequency: p.digest_frequency || "daily",
         industry: b.industry, min_severity: b.minSev, categories: b.categories,
         matched: b.matched, hidden: b.hidden, earlier_this_week: b.weekMatched, elsewhere: b.elsewhere, pool: b.pool,
-        would_send: !weeklyGated && !b.empty, subject: b.subject,
+        has_unsubscribe_token: !!p.unsubscribe_token,
+        would_send: !weeklyGated && !b.empty && !!p.unsubscribe_token, subject: b.subject,
         ...(onlyTo ? { html: b.html } : {}),
       };
     });
-    return new Response(JSON.stringify({ ok: true, dryRun: true, version: 17, day: targetDay, week_start: weekStart,
-      day_incidents: dayIncidents.length, week_incidents: weekIncidents.length, layer_incidents: leadIds.length, recipients: report.length, report }, null, 2),
-      { headers: { "Content-Type": "application/json" } });
+    return jsonResponse({ ok: true, dryRun: true, version: 18, provider: mailProvider(), day: targetDay, week_start: weekStart,
+      day_incidents: dayIncidents.length, week_incidents: weekIncidents.length, layer_incidents: leadIds.length, recipients: report.length, report });
   }
 
   // ── Real send ──────────────────────────────────────────────────────────────
-  let client: SMTPClient;
-  try {
-    client = await createSmtpClient();
-  } catch (err) {
-    return new Response(JSON.stringify({ ok: false, error: (err as Error).message, hint: "set GMAIL_USER + GMAIL_APP_PASSWORD secrets" }),
-      { status: 500, headers: { "Content-Type": "application/json" } });
-  }
+  const setupError = mailSetupError();
+  if (setupError) return jsonResponse({ ok: false, error: setupError }, 500);
 
-  const results = { free: 0, subscriber: 0, skipped_weekly: 0, skipped_empty: 0, failed: 0, errors: [] as any[] };
+  const results = { free: 0, subscriber: 0, skipped_weekly: 0, skipped_empty: 0, skipped_no_unsubscribe: 0, failed: 0, errors: [] as any[] };
   for (const p of profiles) {
     const b = buildForProfile(p, dayIncidents, weekIncidents, targetDay, weekStart, layer);
 
@@ -790,8 +800,15 @@ Deno.serve(async (req) => {
     // explicitly forced or single-recipient tested.
     if (b.weekly && sendDow !== WEEKLY_SEND_DOW && !force && !onlyTo) { results.skipped_weekly++; continue; }
     if (b.empty) { results.skipped_empty++; continue; } // nothing to say to this reader this period
+    // A bulk mail always carries a working unsubscribe link, so no token, no mail.
+    if (!p.unsubscribe_token) { results.skipped_no_unsubscribe++; continue; }
 
-    const res = await sendOne(client, p.email, b.subject, b.html);
+    const res = await sendMail({
+      to: p.email, subject: b.subject, html: b.html,
+      headers: unsubscribeHeaders(p.unsubscribe_token),
+      // Same day, reader and email ⇒ same key: a retry or a re-run cannot mail it twice.
+      idempotencyKey: await idemKey("daily-digest", targetDay, p.id, b.subject, b.html),
+    });
     if (res.ok) {
       if (b.isPartner) results.subscriber++;
       else results.free++;
@@ -801,11 +818,6 @@ Deno.serve(async (req) => {
     }
   }
 
-  try { await client.close(); } catch { /* noop */ }
-
-  return new Response(
-    JSON.stringify({ ok: true, provider: "gmail-smtp", version: 17, day: targetDay,
-      day_incidents: dayIncidents.length, week_incidents: weekIncidents.length, ...results }),
-    { headers: { "Content-Type": "application/json" } },
-  );
+  return jsonResponse({ ok: true, provider: mailProvider(), version: 18, day: targetDay,
+    day_incidents: dayIncidents.length, week_incidents: weekIncidents.length, ...results });
 });

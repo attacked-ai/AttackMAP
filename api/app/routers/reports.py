@@ -10,11 +10,12 @@ get the file untouched. Anonymous readers count as free.
 """
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 
 from ..auth import User, optional_user
 from ..config import settings
@@ -51,6 +52,18 @@ def lock_sections(html: str) -> str:
         open_tag = m.group(0)[:-1] + ' data-locked="server">'
         html = html[:m.start()] + open_tag + keep + LOCK_BLOCK + html[end:]
     return html
+
+
+@router.get("/manifest.json")
+async def manifest():
+    """incident id -> report ref (public; no report content). On GCP the report
+    files live in a private bucket mounted at REPORTS_DIR, so the site reads the
+    manifest here instead of from its own static files."""
+    path = Path(settings.reports_dir) / "manifest.json"
+    if not path.is_file():
+        raise HTTPException(404, "no manifest")
+    return JSONResponse(json.loads(path.read_text(encoding="utf-8")),
+                        headers={"Cache-Control": "public, max-age=3600"})
 
 
 @router.get("/{ref}", response_class=HTMLResponse)

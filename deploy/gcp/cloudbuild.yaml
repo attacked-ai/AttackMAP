@@ -1,0 +1,96 @@
+# Cloud Build: build everything, then (when _DEPLOY=true) roll it out.
+#
+#   Every push to main (a trigger, deploy/gcp/README.md → CI/CD) runs this with
+#   _DEPLOY=true. setup.sh runs it once with _DEPLOY=false to create the images
+#   before the first deploy.
+#
+# Services keep their configuration (env vars, secrets, volumes) from setup.sh's
+# first deploy: `gcloud run deploy <name> --image=…` only swaps the image.
+substitutions:
+  _REGION: asia-south1
+  _SITE_URL: https://attacked-ai-prod.web.app
+  _DEPLOY: "true"
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+  # Default machine: inside Cloud Build's free 2,500 build-minutes a month.
+
+availableSecrets:
+  secretManager:
+    - versionName: projects/$PROJECT_ID/secrets/anon-key/versions/latest
+      env: ANON_KEY
+
+steps:
+  # The website, built for the GCP backend. The anon key is public by design
+  # (like Supabase's), but it comes from Secret Manager so it is never in git.
+  - id: web
+    name: node:20
+    entrypoint: bash
+    secretEnv: [ANON_KEY]
+    args:
+      - -c
+      - |
+        set -e
+        npm ci --no-audit --no-fund
+        VITE_BACKEND=gcp VITE_SUPABASE_URL="$_SITE_URL" VITE_SUPABASE_ANON_KEY="$$ANON_KEY" \
+          VITE_API_URL= VITE_AUTH_PROVIDERS=google npm run build
+
+  - id: api-image
+    name: gcr.io/cloud-builders/docker
+    waitFor: ["-"]
+    args: [build, -t, "$_REGION-docker.pkg.dev/$PROJECT_ID/attacked/api:$BUILD_ID", -t, "$_REGION-docker.pkg.dev/$PROJECT_ID/attacked/api:latest", api]
+
+  - id: data-image
+    name: gcr.io/cloud-builders/docker
+    waitFor: ["-"]
+    args: [build, -t, "$_REGION-docker.pkg.dev/$PROJECT_ID/attacked/data:$BUILD_ID", -t, "$_REGION-docker.pkg.dev/$PROJECT_ID/attacked/data:latest", deploy/gcp/data]
+
+  - id: functions-image
+    name: gcr.io/cloud-builders/docker
+    waitFor: ["-"]
+    # Build context is supabase/functions (deploy/gcp/functions/Dockerfile header).
+    args: [build, -f, deploy/gcp/functions/Dockerfile, -t, "$_REGION-docker.pkg.dev/$PROJECT_ID/attacked/functions:$BUILD_ID", -t, "$_REGION-docker.pkg.dev/$PROJECT_ID/attacked/functions:latest", supabase/functions]
+
+  - id: migrate-image
+    name: gcr.io/cloud-builders/docker
+    waitFor: ["-"]
+    args: [build, -t, "$_REGION-docker.pkg.dev/$PROJECT_ID/attacked/migrate:$BUILD_ID", -t, "$_REGION-docker.pkg.dev/$PROJECT_ID/attacked/migrate:latest", deploy/gcp/db]
+
+  - id: push
+    name: gcr.io/cloud-builders/docker
+    waitFor: [api-image, data-image, functions-image, migrate-image]
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -e
+        for i in api data functions migrate; do
+          docker push --all-tags "$_REGION-docker.pkg.dev/$PROJECT_ID/attacked/$$i"
+        done
+
+  - id: deploy-services
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    waitFor: [push]
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -e
+        [ "$_DEPLOY" = "true" ] || { echo "_DEPLOY=false: images pushed, nothing deployed"; exit 0; }
+        R="$_REGION-docker.pkg.dev/$PROJECT_ID/attacked"
+        gcloud run deploy attacked-data --image="$$R/data:$BUILD_ID" --region="$_REGION" --quiet
+        for f in daily-digest incident-deliver welcome-email incident-images incident-report; do
+          gcloud run deploy "fn-$$f" --image="$$R/functions:$BUILD_ID" --region="$_REGION" --quiet
+        done
+        gcloud run deploy attacked-api --image="$$R/api:$BUILD_ID" --region="$_REGION" --quiet
+
+  - id: hosting
+    name: node:20
+    waitFor: [web, deploy-services]
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -e
+        [ "$_DEPLOY" = "true" ] || exit 0
+        npx --yes firebase-tools@13 deploy --only hosting --project "$PROJECT_ID" --non-interactive

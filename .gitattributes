@@ -1,0 +1,7 @@
+# Scripts and container files run on Linux (Cloud Build, Cloud Run, Cloud Shell):
+# keep Unix line endings in every checkout, including Windows ones.
+*.sh text eol=lf
+Dockerfile text eol=lf
+*.template text eol=lf
+*.sql text eol=lf
+deploy/** text eol=lf

@@ -1,12 +1,27 @@
+// incident-deliver — the internal sweep brief: mails (and WhatsApps) the latest
+// sweep once to every active report_recipients row; delivery_log dedupes.
+// Triggered every 30 min (pg_cron auto-incident-report on Supabase; Cloud
+// Scheduler through the API on Google Cloud: deploy/gcp/functions/README.md).
+//
+// 2026-09-30, portable to Cloud Run:
+//   • callers must be internal (x-internal-token or the service-role key; see
+//     _shared/auth.ts). The response lists recipient addresses.
+//   • mail goes through _shared/mail.ts: Resend when RESEND_API_KEY is set, else
+//     Gmail SMTP as before (GMAIL_USER must now be set; the address fallback that
+//     was hardcoded here is gone).
+//   • every model- or DB-written string in the email HTML is escaped (esc).
+//   • listens on env PORT when set (Cloud Run), else Deno's default 8000.
+
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
-import { SMTPClient } from "https://deno.land/x/denomailer@1.6.0/mod.ts";
+import { idemKey, sendMail } from "../_shared/mail.ts";
+import { requireInternal } from "../_shared/auth.ts";
 
 const URL_ = Deno.env.get("SUPABASE_URL")!;
 const SVC = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-const GMAIL_USER = Deno.env.get("GMAIL_USER") ?? "mohiniawari201@gmail.com";
-// Secret only — never hardcode a fallback password here (set GMAIL_APP_PASSWORD in Supabase secrets).
-const GMAIL_PASS = Deno.env.get("GMAIL_APP_PASSWORD") ?? "";
+// From on the Gmail fallback only (Resend always sends as MAIL_FROM).
+const GMAIL_USER = Deno.env.get("GMAIL_USER") ?? "";
 const EMAIL_FROM = Deno.env.get("EMAIL_FROM");
+const GMAIL_FROM = EMAIL_FROM && EMAIL_FROM.includes("<") ? EMAIL_FROM : `Attacked.ai Intel <${GMAIL_USER}>`;
 // The dashboard moved from the Netlify site (not reachable from the owner's Netlify account) to its own
 // Vercel project on 2026-09-17. A DASHBOARD_URL secret still naming the Netlify host is treated as stale,
 // so the email can never point back at the frozen build.
@@ -42,7 +57,8 @@ const SEVNAME = (s: number) => (s === 5 ? "CRITICAL" : s === 4 ? "HIGH" : s === 
 const SEVCOL = (s: number) => (s === 5 ? "#FF6B6B" : s === 4 ? "#FF8C5A" : s === 3 ? "#FCBD00" : s === 2 ? "#34C759" : "#8E8E93");
 const arrow = (n: number) => (n > 0 ? `▲ ${n}` : n < 0 ? `▼ ${Math.abs(n)}` : "flat");
 
-// Model-written text (summaries, update notes) can carry & < > and quotes, so it is escaped before it goes into HTML.
+// Model-written text (headlines, summaries, entities, update notes) can carry & < > and quotes, so every string
+// from the report is escaped before it goes into HTML — the escapeHtml helper of this file.
 const ESC: Record<string, string> = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
 const esc = (s: unknown) => String(s ?? "").replace(/[&<>"']/g, (c) => ESC[c]);
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -113,14 +129,14 @@ function updatesHtml(rep: any) {
     const raised = u.confirmed && Number.isInteger(u.severity_before) && now > u.severity_before;
     const sev = Number.isInteger(now) ? `&nbsp;<span style="font-family:monospace;font-size:11px;color:${SEVCOL(now)}">${raised ? `S${u.severity_before} → ` : ""}S${now} ${SEVNAME(now)}</span>` : "";
     const src = (u.sources ?? []).find((s: any) => /^https?:\/\//.test(String(s?.url ?? "")));
-    const first = dashLink(u.first_sweep_id);
-    const firstTxt = `first reported ${dayLabel(u.first_sweep_date)}`;
+    const first = esc(dashLink(u.first_sweep_id));
+    const firstTxt = `first reported ${esc(dayLabel(u.first_sweep_date))}`;
     return `
     <tr><td style="padding:10px 0;border-bottom:1px solid #333">
       <span style="font-family:monospace;font-size:10px;color:#FCBD00;border:1px solid #FCBD0055;padding:1px 6px;border-radius:3px">${esc(DEV_LABEL[u.development_type] ?? "Development")}</span>${sev}${u.confirmed ? "" : `&nbsp;<span style="font-family:monospace;font-size:10px;color:#A8A8A8">UNCONFIRMED</span>`}<br>
       <b style="color:#fff">${esc(u.headline)}</b>
       <div style="color:#A8A8A8;font-size:13px;margin-top:4px;line-height:1.55">${esc(u.what_changed)}</div>
-      <span style="color:#777;font-size:11px;font-family:monospace">${dayLabel(u.update_date)} · ${esc(u.entity)} · ${first ? `<a href="${first}" style="color:#A8A8A8">${firstTxt}</a>` : firstTxt}${src ? ` · <a href="${esc(src.url)}" style="color:#FCBD00;text-decoration:none">${esc(src.publisher || "source")}</a>` : ""}</span>
+      <span style="color:#777;font-size:11px;font-family:monospace">${esc(dayLabel(u.update_date))} · ${esc(u.entity)} · ${first ? `<a href="${first}" style="color:#A8A8A8">${firstTxt}</a>` : firstTxt}${src ? ` · <a href="${esc(src.url)}" style="color:#FCBD00;text-decoration:none">${esc(src.publisher || "source")}</a>` : ""}</span>
     </td></tr>`;
   }).join("");
   return `<h3 style="font-family:Georgia,serif;color:#fff;font-size:18px;border-bottom:1px solid #FCBD00;padding-bottom:6px;margin-top:24px">Updates to Earlier Incidents — ${list.length}</h3><table style="width:100%;border-collapse:collapse">${rows}</table>`;
@@ -128,29 +144,30 @@ function updatesHtml(rep: any) {
 
 function emailHtml(rep: any, exec: boolean) {
   const t = rep.totals, d = rep.delta;
-  const url = dashLink(rep.sweep_id);
-  const btn = url ? `<div style="margin:18px 0"><a href="${url}" style="display:inline-block;background:#FCBD00;color:#1A1A1A;font-weight:600;font-size:13px;text-decoration:none;padding:11px 22px;border-radius:6px">→ View Live Dashboard (${rep.sweep_date})</a></div>` : "";
+  const url = esc(dashLink(rep.sweep_id));
+  const day = esc(rep.sweep_date);
+  const btn = url ? `<div style="margin:18px 0"><a href="${url}" style="display:inline-block;background:#FCBD00;color:#1A1A1A;font-weight:600;font-size:13px;text-decoration:none;padding:11px 22px;border-radius:6px">→ View Live Dashboard (${day})</a></div>` : "";
   const majors = (rep.major_incidents ?? []).map((m: any) => `
     <tr><td style="padding:10px 0;border-bottom:1px solid #333">
-      <span style="font-family:monospace;font-size:11px;color:${SEVCOL(m.severity)}">S${m.severity} ${SEVNAME(m.severity)}</span>
-      &nbsp;<b style="color:#fff">${m.headline}</b><br>
-      <span style="color:#A8A8A8;font-size:12px">${m.category} · ${m.entity}${m.country ? " · " + m.country : ""}${m.threat_actor ? " · ⚔ " + m.threat_actor : ""}</span>
+      <span style="font-family:monospace;font-size:11px;color:${SEVCOL(m.severity)}">S${esc(m.severity)} ${SEVNAME(m.severity)}</span>
+      &nbsp;<b style="color:#fff">${esc(m.headline)}</b><br>
+      <span style="color:#A8A8A8;font-size:12px">${esc(m.category)} · ${esc(m.entity)}${m.country ? " · " + esc(m.country) : ""}${m.threat_actor ? " · ⚔ " + esc(m.threat_actor) : ""}</span>
     </td></tr>`).join("");
   const cats = exec ? "" : (rep.categories ?? []).map((c: any) =>
-    `<tr><td style="color:#A8A8A8;padding:3px 0">${c.label}</td><td style="font-family:monospace;text-align:right;color:#fff">${c.incidents}${c.major ? ` (${c.major}⚑)` : ""}</td></tr>`).join("");
+    `<tr><td style="color:#A8A8A8;padding:3px 0">${esc(c.label)}</td><td style="font-family:monospace;text-align:right;color:#fff">${esc(c.incidents)}${c.major ? ` (${esc(c.major)}⚑)` : ""}</td></tr>`).join("");
   const fullLog = exec ? "" : (rep.incidents ?? []).map((m: any) => `
     <tr><td style="padding:12px 0;border-bottom:1px solid #2a2a2a">
-      <span style="font-family:monospace;font-size:10px;color:${SEVCOL(m.severity)};border:1px solid ${SEVCOL(m.severity)}55;padding:1px 6px;border-radius:3px">S${m.severity} ${SEVNAME(m.severity)}</span>
-      &nbsp;<b style="color:#fff;font-size:14px">${m.headline}</b><br>
-      <span style="color:#8C8C8C;font-size:12px">${m.entity ?? ""}${m.country ? " · " + m.country : ""}${m.sector ? " · " + m.sector : ""}</span>
+      <span style="font-family:monospace;font-size:10px;color:${SEVCOL(m.severity)};border:1px solid ${SEVCOL(m.severity)}55;padding:1px 6px;border-radius:3px">S${esc(m.severity)} ${SEVNAME(m.severity)}</span>
+      &nbsp;<b style="color:#fff;font-size:14px">${esc(m.headline)}</b><br>
+      <span style="color:#8C8C8C;font-size:12px">${esc(m.entity)}${m.country ? " · " + esc(m.country) : ""}${m.sector ? " · " + esc(m.sector) : ""}</span>
       ${tagsHtml(m)}
       ${m.summary ? `<div style="color:#A8A8A8;font-size:13px;margin-top:5px;line-height:1.55">${summaryHtml(m.summary)}</div>` : ""}
     </td></tr>`).join("");
   return `<div style="background:#1A1A1A;color:#fff;font-family:Inter,Arial,sans-serif;padding:28px;max-width:680px;margin:0 auto">
     <div style="font-weight:600;font-size:16px">Attacked<span style="color:#FCBD00">.ai</span> <span style="color:#585858;font-size:11px;text-transform:uppercase;letter-spacing:1px">Incident Intelligence</span></div>
-    <div style="font-family:monospace;color:#FCBD00;font-size:11px;letter-spacing:1px;margin-top:18px">SWEEP #${rep.sweep_id} · ${rep.sweep_date}${Number.isFinite(rep.lookback_hours) ? ` · LAST ${rep.lookback_hours}H` : ""}</div>
+    <div style="font-family:monospace;color:#FCBD00;font-size:11px;letter-spacing:1px;margin-top:18px">SWEEP #${esc(rep.sweep_id)} · ${day}${Number.isFinite(rep.lookback_hours) ? ` · LAST ${rep.lookback_hours}H` : ""}</div>
     <h1 style="font-family:Georgia,serif;font-size:30px;margin:6px 0 14px">${exec ? "Executive Brief" : "Daily Incident Brief"}</h1>
-    <div style="border-left:2px solid #FCBD00;padding-left:14px;color:#A8A8A8;font-size:14px">${rep.exec_line}</div>
+    <div style="border-left:2px solid #FCBD00;padding-left:14px;color:#A8A8A8;font-size:14px">${esc(rep.exec_line)}</div>
     ${btn}
     <table style="width:100%;margin:22px 0;border-collapse:collapse;text-align:center"><tr>
       <td><div style="font-family:monospace;font-size:26px;color:#FCBD00">${t.total}</div><div style="font-size:10px;color:#585858;text-transform:uppercase">Incidents</div><div style="font-size:10px;font-family:monospace;color:#A8A8A8">${arrow(d.total_change)}</div></td>
@@ -163,7 +180,7 @@ function emailHtml(rep: any, exec: boolean) {
     ${updatesHtml(rep)}
     ${exec ? "" : `<h3 style="font-family:Georgia,serif;color:#fff;font-size:18px;border-bottom:1px solid #FCBD00;padding-bottom:6px;margin-top:24px">By Category</h3><table style="width:100%;border-collapse:collapse;font-size:13px">${cats}</table>`}
     ${exec ? "" : `<h3 style="font-family:Georgia,serif;color:#fff;font-size:18px;border-bottom:1px solid #FCBD00;padding-bottom:6px;margin-top:24px">All Incidents — ${rep.incidents?.length ?? 0} total</h3><table style="width:100%;border-collapse:collapse">${fullLog}</table>`}
-    <p style="color:#585858;font-size:11px;margin-top:26px">${url ? `<a href="${url}" style="color:#FCBD00;text-decoration:none">Open full dashboard →</a> · ` : ""}Attacked.ai — Confidential Intelligence · sweep #${rep.sweep_id}</p>
+    <p style="color:#585858;font-size:11px;margin-top:26px">${url ? `<a href="${url}" style="color:#FCBD00;text-decoration:none">Open full dashboard →</a> · ` : ""}Attacked.ai — Confidential Intelligence · sweep #${esc(rep.sweep_id)}</p>
   </div>`;
 }
 
@@ -176,19 +193,11 @@ function waText(rep: any) {
   return `*Attacked.ai — Daily Brief* (${rep.sweep_date})\n${t.total} incidents · ${t.major} major · ${t.critical} critical (${arrow(rep.delta.total_change)} vs prior)\n\n${top || "No major incidents."}${ups ? `\n\nUpdates to earlier incidents:\n${ups}` : ""}${link}`;
 }
 
-async function sendEmail(to: string, subject: string, html: string) {
-  if (!GMAIL_USER || !GMAIL_PASS) return { status: "skipped", error: "Gmail creds missing" };
-  try {
-    const client = new SMTPClient({
-      connection: { hostname: "smtp.gmail.com", port: 465, tls: true, auth: { username: GMAIL_USER, password: GMAIL_PASS } },
-    });
-    const from = EMAIL_FROM && EMAIL_FROM.includes("<") ? EMAIL_FROM : `Attacked.ai Intel <${GMAIL_USER}>`;
-    await client.send({ from, to, subject, html, content: "Daily incident brief — view in an HTML-capable mail client." });
-    await client.close();
-    return { status: "sent", provider_id: "gmail-smtp" };
-  } catch (e) {
-    return { status: "failed", error: String(e) };
-  }
+// delivery_log keeps the provider's message id: Resend's id, or "gmail-smtp" as before.
+async function sendEmail(to: string, subject: string, html: string, idempotencyKey: string) {
+  const res = await sendMail({ to, subject, html, idempotencyKey, gmailFrom: GMAIL_FROM });
+  if (res.ok) return { status: "sent", provider_id: res.id || res.provider };
+  return { status: res.skipped ? "skipped" : "failed", error: res.error };
 }
 
 async function sendWhatsApp(to: string, body: string) {
@@ -203,7 +212,9 @@ async function sendWhatsApp(to: string, body: string) {
   return r.ok ? { status: "sent", provider_id: body_.sid } : { status: "failed", error: JSON.stringify(body_) };
 }
 
-Deno.serve(async (req) => {
+Deno.serve({ port: Number(Deno.env.get("PORT")) || 8000 }, async (req) => {
+  const denied = await requireInternal(req);
+  if (denied) return denied;
   try {
     const input = req.method === "POST" ? await req.json().catch(() => ({})) : {};
     const sweep_id = input.sweep_id ?? null;
@@ -228,7 +239,11 @@ Deno.serve(async (req) => {
       if (rcpt.channel === "email") {
         const upd = rep.totals.updates ?? 0;
         const subj = `${exec ? "Exec Brief" : "Incident Brief"} — ${rep.totals.total} incidents, ${rep.totals.major} major${upd ? `, ${upd} update${upd === 1 ? "" : "s"}` : ""} (${rep.sweep_date})`;
-        res = await sendEmail(rcpt.address, subj, emailHtml(rep, exec));
+        const html = emailHtml(rep, exec);
+        // Same sweep, recipient and email ⇒ same key, so a retry cannot mail twice; force (a deliberate
+        // re-send) gets a fresh one.
+        const key = await idemKey("incident-deliver", sid, rcpt.channel, rcpt.address, subj, html, force ? Date.now() : "");
+        res = await sendEmail(rcpt.address, subj, html, key);
       } else {
         res = await sendWhatsApp(rcpt.address, waText(rep));
       }
