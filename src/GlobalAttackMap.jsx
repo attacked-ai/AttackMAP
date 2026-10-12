@@ -5405,6 +5405,7 @@ function BlastRadiusBody({ incident, channels }) {
                   chevron rotates 90° when expanded so users see the
                   state without reading. */}
               <div
+                className="br-row"
                 onClick={() => {
                   // Teaser model: first channel is the public reveal — let
                   // public viewers expand it to see real entity detail.
@@ -8636,7 +8637,7 @@ function AuditDrawer({ incidents, onClose }) {
                 <td style={{ padding: "10px 8px", color: BRAND.white, verticalAlign: "top", maxWidth: 360 }}>
                   <div style={{ marginBottom: row.url ? 4 : 0 }}>{row.title}</div>
                   {row.url && (
-                    <a href={row.url} target="_blank" rel="noreferrer"
+                    <a className="map-audit-src" href={row.url} target="_blank" rel="noreferrer"
                       style={{ color: BRAND.textMuted, fontSize: 10, fontFamily: "Inter, sans-serif", textDecoration: "none", wordBreak: "break-all" }}>
                       {row.url}
                     </a>
@@ -10606,24 +10607,26 @@ export default function GlobalAttackMap() {
                       <span style={{ padding: "1px 5px", background: BRAND.gold, color: BRAND.obsidian, borderRadius: 0, fontSize: 9 }}>{archiveIndex.length}</span>
                     )}
                   </button>
+                  {/* map-chip / map-chip-more / map-clearall: map-responsive.css
+                      gives them a solid backing over bright terrain. */}
                   {activeSeverities.size > 0 && (
-                    <span style={chip}>Critical+<span style={xs} onClick={() => setActiveSeverities(new Set())}>×</span></span>
+                    <span className="map-chip" style={chip}>Critical+<span style={xs} onClick={() => setActiveSeverities(new Set())}>×</span></span>
                   )}
                   {[...activeCats].map(code => (
-                    <span key={code} style={chip}>{code}<span style={xs} onClick={() => setActiveCats(prev => { const n = new Set(prev); n.delete(code); return n; })}>×</span></span>
+                    <span key={code} className="map-chip" style={chip}>{code}<span style={xs} onClick={() => setActiveCats(prev => { const n = new Set(prev); n.delete(code); return n; })}>×</span></span>
                   ))}
                   {[...activeIndustries].slice(0, 3).map(ind => (
-                    <span key={ind} style={chip}>{String(ind).slice(0, 16)}<span style={xs} onClick={() => setActiveIndustries(prev => { const n = new Set(prev); n.delete(ind); return n; })}>×</span></span>
+                    <span key={ind} className="map-chip" style={chip}>{String(ind).slice(0, 16)}<span style={xs} onClick={() => setActiveIndustries(prev => { const n = new Set(prev); n.delete(ind); return n; })}>×</span></span>
                   ))}
-                  {activeIndustries.size > 3 && <span style={{ ...chip, background: "rgba(255,255,255,0.06)", color: BRAND.textSecondary, border: `1px solid ${BRAND.borderSubtle}` }}>+{activeIndustries.size - 3}</span>}
-                  
+                  {activeIndustries.size > 3 && <span className="map-chip-more" style={{ ...chip, background: "rgba(255,255,255,0.06)", color: BRAND.textSecondary, border: `1px solid ${BRAND.borderSubtle}` }}>+{activeIndustries.size - 3}</span>}
+
                   {[...activeCountries].slice(0, 3).map(country => (
-                    <span key={country} style={chip}>{String(country).slice(0, 16)}<span style={xs} onClick={() => setActiveCountries(prev => { const n = new Set(prev); n.delete(country); return n; })}>×</span></span>
+                    <span key={country} className="map-chip" style={chip}>{String(country).slice(0, 16)}<span style={xs} onClick={() => setActiveCountries(prev => { const n = new Set(prev); n.delete(country); return n; })}>×</span></span>
                   ))}
-                  {activeCountries.size > 3 && <span style={{ ...chip, background: "rgba(255,255,255,0.06)", color: BRAND.textSecondary, border: `1px solid ${BRAND.borderSubtle}` }}>+{activeCountries.size - 3}</span>}
-                  
+                  {activeCountries.size > 3 && <span className="map-chip-more" style={{ ...chip, background: "rgba(255,255,255,0.06)", color: BRAND.textSecondary, border: `1px solid ${BRAND.borderSubtle}` }}>+{activeCountries.size - 3}</span>}
+
                   {fCount > 0 && (
-                    <button onClick={() => { setActiveSeverities(new Set()); setActiveCats(new Set()); setActiveIndustries(new Set()); setActiveCountries(new Set()); }}
+                    <button className="map-clearall" onClick={() => { setActiveSeverities(new Set()); setActiveCats(new Set()); setActiveIndustries(new Set()); setActiveCountries(new Set()); }}
                       style={{ background: "none", border: "none", color: BRAND.textSecondary, fontSize: 10, letterSpacing: "0.08em", textTransform: "uppercase", cursor: "pointer", fontFamily: "Inter, sans-serif" }}>Clear all</button>
                   )}
                 </div>

@@ -278,7 +278,9 @@ function ReportFrame({ i, reportRef, subscriber, onSubscribe, readerName }) {
   // that header block away.
   // `doc` re-runs this once the iframe has mounted (it renders only after the
   // report HTML has arrived); measured from the page top, so a scrolled page
-  // gives the same height.
+  // gives the same height. `lift` is true on those narrow, short phones only
+  // (see the report's scroll listener below).
+  const lift = useRef(false);
   useEffect(() => {
     const fit = () => {
       const fr = ref.current; if (!fr) return;
@@ -288,7 +290,8 @@ function ReportFrame({ i, reportRef, subscriber, onSubscribe, readerName }) {
       const pinned = (nav ? nav.offsetHeight : 64) + (tb && getComputedStyle(tb).position === "sticky" ? tb.offsetHeight : 0);
       const room = Math.round(window.innerHeight - top - 6);
       const cap = window.innerHeight - pinned - 8;
-      if (room >= 300 && room < window.innerHeight * 0.6) setH(Math.max(room, cap));
+      lift.current = room >= 300 && room < window.innerHeight * 0.6;
+      if (lift.current) setH(Math.max(room, cap));
       else setH(room >= 300 ? room : Math.max(room, Math.min(480, cap)));
     };
     fit(); window.addEventListener("resize", fit);
@@ -296,7 +299,26 @@ function ReportFrame({ i, reportRef, subscriber, onSubscribe, readerName }) {
   }, [reportRef, doc]);
   useEffect(() => {
     const fr = ref.current; if (!fr) return;
-    const onLoad = () => { prepareReportFrame(fr, { subscriber, onSubscribe, readerName }); };
+    const onLoad = () => {
+      prepareReportFrame(fr, { subscriber, onSubscribe, readerName });
+      // A swipe on the report scrolls the report, never the page, so on those
+      // narrow, short phones the header block would stay unless the reader
+      // swiped on it. Reading down inside the report therefore scrolls the
+      // page to its end: the frame then fills the screen under the pinned
+      // bars. Scrolling the page back up shows the header again.
+      let sc = null;
+      try { sc = fr.contentDocument && fr.contentDocument.getElementById("readerScroll"); } catch { /* noop */ }
+      if (sc && !sc.__liftHost) {
+        let last = sc.scrollTop, at = 0;
+        sc.__liftHost = () => {
+          const y = sc.scrollTop, down = y > last; last = y;
+          if (!down || !lift.current || !fr.isConnected || Date.now() - at < 500) return;
+          const max = document.documentElement.scrollHeight - window.innerHeight;
+          if (window.scrollY < max - 1) { at = Date.now(); window.scrollTo({ top: max, behavior: "smooth" }); }
+        };
+        sc.addEventListener("scroll", sc.__liftHost, { passive: true });
+      }
+    };
     fr.addEventListener("load", onLoad);
     if (fr.contentDocument?.readyState === "complete" && fr.contentDocument.body?.children.length) onLoad();
     return () => { fr.removeEventListener("load", onLoad); };
