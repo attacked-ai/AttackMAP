@@ -1130,6 +1130,7 @@ async function _fetchSupabaseTable(url, key, table, query = "") {
       });
       if (!res.ok && res.status !== 206) {
         console.warn(`Supabase ${table} fetch failed: ${res.status} ${res.statusText}`);
+        all.incomplete = true;
         return all;
       }
       const rows = await res.json();
@@ -1138,10 +1139,69 @@ async function _fetchSupabaseTable(url, key, table, query = "") {
       if (rows.length < PAGE) break;
     } catch (e) {
       console.warn(`Supabase ${table} fetch error:`, e?.message || e);
+      all.incomplete = true;
       break;
     }
   }
   return all;
+}
+
+// The full incident list is the map's biggest download (~2,300 rows, several
+// MB). Both the fast paint and the full boot need it, and before 2026-10-12
+// each fetched it separately, so every visit downloaded it twice. That, plus
+// test loops, used up the Supabase Free egress allowance (5 GB/month).
+// Now: ONE download per page load, shared by both callers, and a 15-minute
+// copy in the browser's Cache Storage so a reload does not download it again.
+// Only signed-out loads are kept, and only when every page came back.
+const INCIDENT_LIST_COLS = "id,headline,summary,entity,sector,industry,location_name,country,latitude,longitude,event_date,disclosure_date,incident_day,primary_category,primary_subcategory_code,primary_subcategory_name,severity,severity_rationale,confidence,image_url";
+const INCIDENT_CACHE = "attacked-incidents-v1";
+const INCIDENT_CACHE_TTL_MS = 15 * 60 * 1000;
+let _incidentRowsP = null;
+
+async function _readIncidentCache(url) {
+  try {
+    if (typeof caches === "undefined") return null;
+    const c = await caches.open(INCIDENT_CACHE);
+    const hit = await c.match(url);
+    if (!hit) return null;
+    const at = Number(hit.headers.get("x-saved-at")) || 0;
+    if (Date.now() - at > INCIDENT_CACHE_TTL_MS) return null;
+    const rows = await hit.json();
+    return Array.isArray(rows) && rows.length ? rows : null;
+  } catch { return null; }
+}
+
+async function _writeIncidentCache(url, rows) {
+  try {
+    if (typeof caches === "undefined") return;
+    const c = await caches.open(INCIDENT_CACHE);
+    await c.put(url, new Response(JSON.stringify(rows), {
+      headers: { "content-type": "application/json", "x-saved-at": String(Date.now()) },
+    }));
+  } catch { /* storage full or blocked: just skip the cache */ }
+}
+
+function _fetchIncidentRows(url, key) {
+  if (!_incidentRowsP) {
+    _incidentRowsP = (async () => {
+      const query = `select=${INCIDENT_LIST_COLS}&incident_day=not.is.null&latitude=not.is.null&longitude=not.is.null&order=incident_day.desc&limit=10000`;
+      const cacheKey = `${url.replace(/\/$/, "")}/rest/v1/incidents?${query}`;
+      const signedOut = !_readerToken;
+      if (signedOut) {
+        const cached = await _readIncidentCache(cacheKey);
+        if (cached) return cached;
+      }
+      const rows = await _fetchSupabaseTable(url, key, "incidents", query);
+      if (rows.incomplete || rows.length === 0) {
+        _incidentRowsP = null;   // let the next caller try again
+      } else if (signedOut) {
+        _writeIncidentCache(cacheKey, rows);
+      }
+      return rows;
+    })();
+  }
+  // Callers add fields to the rows, so each gets its own shallow copies.
+  return _incidentRowsP.then((rows) => rows.map((r) => ({ ...r })));
 }
 
 // Reshape a flat incidents row + its embedded child arrays into the nested
@@ -1269,23 +1329,14 @@ async function loadFromSupabase() {
   // the columns the renderer actually uses; debug/internal columns like
   // pass3_response_head, velocity_*, etc. are excluded. Children are stitched
   // onto their parent incident client-side via incident_id lookup maps.
-  const q = "limit=10000";
-  const incidentCols = [
-    "id", "headline", "summary", "entity", "sector", "industry",
-    "location_name", "country",
-    "latitude", "longitude", "event_date", "disclosure_date", "incident_day",
-    "primary_category", "primary_subcategory_code", "primary_subcategory_name",
-    "image_url", // the stored picture (incident-images function), 2026-09-23
-    // PostgREST rejects the WHOLE select when any single column is unknown, so
-    // a single stale name here takes down the only query that loads live
-    // incidents, and every visitor silently falls back to the sweep files
-    // baked into public/sweeps/ (which stop at 2026-05-28). That is exactly
-    // how the "map isn't populating day by day" outage happened, via
-    // `confidence` being named after it was dropped from the view. It has
-    // since been restored to public.incidents from the sweep.incidents base
-    // table. Never add a column here without first confirming it exists.
-    "severity", "severity_rationale", "confidence",
-  ].join(",");
+  // The incident columns live in INCIDENT_LIST_COLS (next to _fetchIncidentRows).
+  // PostgREST rejects the WHOLE select when any single column is unknown, so
+  // a single stale name there takes down the only query that loads live
+  // incidents, and every visitor silently falls back to the sweep files
+  // baked into public/sweeps/ (which stop at 2026-05-28). That is exactly
+  // how the "map isn't populating day by day" outage happened, via
+  // `confidence` being named after it was dropped from the view. Never add a
+  // column there without first confirming it exists on public.incidents.
   const viIncidentCols = [
     "id", "vi_sweep_id",
     "headline", "summary", "entity", "sector", "industry",
@@ -1312,8 +1363,7 @@ async function loadFromSupabase() {
   //      exactly as blast_radius already was.
   // ────────────────────────────────────────────────────────────────────
   const [regularRows, reporterRows] = await Promise.all([
-    _fetchSupabaseTable(url, key, "incidents",
-      `select=${incidentCols}&incident_day=not.is.null&latitude=not.is.null&longitude=not.is.null&order=incident_day.desc&${q}`),
+    _fetchIncidentRows(url, key),
     _fetchSupabaseTable(url, key, "reporters", "select=slug,name,desk,cats,color&limit=200"),
   ]);
   // vi_* incidents were dropped from the database on 2026-07-28; keep the
@@ -1463,15 +1513,12 @@ async function loadIncidentsFast(preferDay = null, incidentId = null) {
   const env = (typeof import.meta !== "undefined" && import.meta.env) || {};
   const url = env.VITE_SUPABASE_URL, key = env.VITE_SUPABASE_ANON_KEY;
   if (!url || !key) return null;
-  // Keep this list in lockstep with incidentCols in loadFromSupabase — a name
-  // that is not on public.incidents 400s this fast-paint query and drops the
-  // first render back to the baked May sweeps. See the note there.
-  const cols = "id,headline,summary,entity,sector,industry,location_name,country,latitude,longitude,event_date,disclosure_date,incident_day,primary_category,primary_subcategory_code,primary_subcategory_name,severity,severity_rationale,confidence,image_url";
+  // Shares one download with loadFromSupabase (see _fetchIncidentRows).
   try {
     // vi_incidents / vi_sweeps were dropped on 2026-07-28. They 404'd on every
     // single page load; keep the downstream shape with empty arrays instead.
     const [reg, reporters] = await Promise.all([
-      _fetchSupabaseTable(url, key, "incidents", `select=${cols}&incident_day=not.is.null&latitude=not.is.null&longitude=not.is.null&order=incident_day.desc&limit=10000`),
+      _fetchIncidentRows(url, key),
       _fetchSupabaseTable(url, key, "reporters", "select=slug,name,desk,cats,color&limit=200"),
     ]);
     const vi = [], sweeps = [];
