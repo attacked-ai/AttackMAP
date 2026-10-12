@@ -54,7 +54,9 @@ export function SiteNav({ active }) {
 
   return (
     <>
-      <header role="banner" className="site-nav">
+      {/* `acct-open` lifts the bar while the account menu is open, so the menu
+          clears the Attack Map's floating panels (see site-nav.css). */}
+      <header role="banner" className={`site-nav${menuOpen ? " acct-open" : ""}`}>
         <a href="/" aria-label="Attacked.ai home" className="site-brand" onClick={brandClick}>
           <img src="/attacked-ai-logo.svg" alt="" className="shield" />
           <span className="wordmark">Attacked<span className="ai">.ai</span><sup>™</sup></span>

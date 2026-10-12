@@ -172,6 +172,13 @@
   /* Guided-tour "Replay" was an 18px-tall text button. */
   .map-tour-replay { min-height: 32px; padding: 0 8px; }
 }
+/* Open-incident caption: touch screens have no hover, so it says "Tap the
+   dots..." there instead of "Hover the dots...". */
+.map-hint-touch { display: none; }
+@media (hover: none) {
+  .map-hint-mouse { display: none; }
+  .map-hint-touch { display: inline; }
+}
 @media (pointer: coarse) {
   .map-x {
     min-width: 40px !important; min-height: 40px !important;

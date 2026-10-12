@@ -415,6 +415,12 @@ export function LandingPage() {
           .landing-root .lp-hero { padding-top: 40px !important; }
           .landing-root .r-herotext { align-self: start; }
         }
+        /* Phones (portrait, and landscape touch screens under 500px tall): no
+           text under 11px. The ticker label, live-sample and feed-card tags,
+           inbox labels and the welcome eyebrow go from 10-10.5px to 11px. */
+        @media (max-width: 600px), (pointer: coarse) and (max-height: 500px) {
+          .landing-root .lp-ticklabel, .landing-root .lp-fs11 { font-size: 11px !important; }
+        }
       `}</style>
       <a href="#main-content" className="landing-skip-link">Skip to content</a>
 
@@ -570,17 +576,19 @@ export function LandingPage() {
               }}>
               <div style={{ flex: "1 1 240px", minWidth: 0, padding: "16px 18px" }}>
                 <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "space-between", alignItems: "center", columnGap: 10, rowGap: 4, marginBottom: 10 }}>
-                  <span className="livesample-tag" style={{ display: "inline-flex", alignItems: "center", gap: 7, fontSize: 10, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: BRAND.t2 }}>
-                    <span style={{ width: 6, height: 6, borderRadius: 0, background: BRAND.gold }} />
-                    Live sample · {fmtDay(intel.latestDay) || "today"}
+                  <span className="livesample-tag lp-fs11" style={{ display: "inline-flex", alignItems: "center", gap: 7, fontSize: 10, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: BRAND.t2 }}>
+                    <span style={{ flexShrink: 0, width: 6, height: 6, borderRadius: 0, background: BRAND.gold }} />
+                    {/* The date stays in one piece: if the tag must wrap (11px
+                        on a 280px phone) it breaks after the "·". */}
+                    <span>Live sample · <span style={{ whiteSpace: "nowrap" }}>{fmtDay(intel.latestDay) || "today"}</span></span>
                   </span>
-                  <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: BRAND.gold, whiteSpace: "nowrap" }}>GUARD classified</span>
+                  <span className="lp-fs11" style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: BRAND.gold, whiteSpace: "nowrap" }}>GUARD classified</span>
                 </div>
                 {hero ? (
                   <>
                     <div style={{ display: "inline-flex", gap: 8, marginBottom: 9 }}>
-                      <span style={{ padding: "3px 9px", borderRadius: 0, fontSize: 10, fontWeight: 700, letterSpacing: "0.08em", background: `${sevColor}1f`, color: sevColor, border: `1px solid ${sevColor}55` }}>{SEVERITY_LABEL[hero.severity] || "—"}</span>
-                      <span style={{ padding: "3px 9px", borderRadius: 0, fontSize: 10, fontWeight: 700, letterSpacing: "0.08em", background: "rgba(255,255,255,0.06)", color: BRAND.t2, border: `1px solid ${BRAND.border}` }}>{hero.primary_category || "OPS"}</span>
+                      <span className="lp-fs11" style={{ padding: "3px 9px", borderRadius: 0, fontSize: 10, fontWeight: 700, letterSpacing: "0.08em", background: `${sevColor}1f`, color: sevColor, border: `1px solid ${sevColor}55` }}>{SEVERITY_LABEL[hero.severity] || "—"}</span>
+                      <span className="lp-fs11" style={{ padding: "3px 9px", borderRadius: 0, fontSize: 10, fontWeight: 700, letterSpacing: "0.08em", background: "rgba(255,255,255,0.06)", color: BRAND.t2, border: `1px solid ${BRAND.border}` }}>{hero.primary_category || "OPS"}</span>
                     </div>
                     <div className="livesample-body">
                       <div style={{ fontSize: 16, fontWeight: 700, lineHeight: 1.28, letterSpacing: "-0.01em", marginBottom: 8, color: BRAND.white, display: "-webkit-box", WebkitLineClamp: 3, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{hero.headline}</div>
@@ -594,7 +602,7 @@ export function LandingPage() {
                 )}
               </div>
               <div className="livesample-side" style={{ flex: "1 1 180px", padding: "16px 18px", borderLeft: `1px solid ${BRAND.border}`, background: "rgba(252,189,0,0.04)", display: "flex", flexDirection: "column", justifyContent: "center" }}>
-                <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.14em", textTransform: "uppercase", color: BRAND.gold, marginBottom: 8 }}>What happened</div>
+                <div className="lp-fs11" style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.14em", textTransform: "uppercase", color: BRAND.gold, marginBottom: 8 }}>What happened</div>
                 <div className="livesample-sum" style={{ fontSize: 11.5, lineHeight: 1.55, color: BRAND.t2, display: "-webkit-box", WebkitLineClamp: 5, WebkitBoxOrient: "vertical", overflow: "hidden" }}>
                   {hero?.summary || "Geolocated and GUARD-classified, with the blast radius traced to the named companies in scope."}
                 </div>
@@ -711,7 +719,7 @@ export function LandingPage() {
                       position: "absolute", left: 12, bottom: 10,
                       display: "flex", gap: 6, alignItems: "center",
                     }}>
-                      <span style={{
+                      <span className="lp-fs11" style={{
                         padding: "2px 8px", borderRadius: 0,
                         fontSize: 10, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase",
                         background: `${SEVERITY_COLOR[c.severity] || BRAND.gold}26`,
@@ -719,7 +727,7 @@ export function LandingPage() {
                         border: `1px solid ${SEVERITY_COLOR[c.severity] || BRAND.gold}66`,
                         backdropFilter: "blur(4px)",
                       }}>{SEVERITY_LABEL[c.severity] || "—"}</span>
-                      <span style={{
+                      <span className="lp-fs11" style={{
                         padding: "2px 7px", borderRadius: 0,
                         fontSize: 10, fontWeight: 700, color: BRAND.white,
                         letterSpacing: "0.08em", textTransform: "uppercase",
@@ -735,13 +743,13 @@ export function LandingPage() {
                       letterSpacing: "-0.01em",
                       display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden",
                     }}>{c.headline}</h3>
-                    <div style={{
+                    <div className="lp-fs11" style={{
                       marginTop: 8, fontSize: 10.5, color: "#6A6A6A", fontWeight: 600,
                       overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
                     }}>
                       {[c.entity, c.country, c.industry || c.sector].filter(Boolean).join("  ·  ")}
                     </div>
-                    <div style={{
+                    <div className="lp-fs11" style={{
                       marginTop: "auto", paddingTop: 12,
                       fontSize: 10, fontWeight: 700, color: "#8A6D00",
                       letterSpacing: "0.08em", textTransform: "uppercase",
@@ -880,7 +888,7 @@ export function LandingPage() {
               background: "#FFFFFF", border: `1px solid ${BRAND.lineDark}`,
               borderRadius: 0, padding: "26px 26px 24px",
             }}>
-              <div style={{
+              <div className="lp-fs11" style={{
                 fontSize: 10.5, fontWeight: 700, color: "#6A6A6A",
                 letterSpacing: "0.14em", textTransform: "uppercase", marginBottom: 8,
               }}>Free · daily</div>
@@ -904,7 +912,7 @@ export function LandingPage() {
               borderRadius: 0, padding: "26px 26px 24px",
               position: "relative", boxShadow: "0 16px 40px rgba(252,189,0,0.14)",
             }}>
-              <div style={{
+              <div className="lp-fs11" style={{
                 fontSize: 10.5, fontWeight: 700, color: "#8A6D00",
                 letterSpacing: "0.14em", textTransform: "uppercase", marginBottom: 8,
               }}>Subscriber · daily</div>
@@ -1015,7 +1023,7 @@ export function LandingPage() {
             }}>×</button>
             <img className="welcome-logo" src="/attacked-ai-logo.svg" alt="Attacked.ai" width={52} height={52}
               style={{ display: "block", margin: "0 auto 14px" }} />
-            <div style={{ ...eyebrowStyle, fontSize: 10.5 }}>Welcome to Attacked.ai</div>
+            <div className="lp-fs11" style={{ ...eyebrowStyle, fontSize: 10.5 }}>Welcome to Attacked.ai</div>
             <h3 className="welcome-h" style={{
               margin: "12px 0 0", fontSize: 26, fontWeight: 800,
               letterSpacing: "-0.015em", lineHeight: 1.2,

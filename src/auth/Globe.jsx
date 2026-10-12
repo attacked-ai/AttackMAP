@@ -153,14 +153,26 @@ export function Globe({ size = 380 }) {
       {/* The legend (left, 16-262px) and the readout (right, ~58px + 16px inset)
           share the bottom strip. Below a 350px globe they cannot both fit with
           a clear gap, so the decorative readout is hidden there; the legend stays. */}
-      <style>{`.globe-root{container-type:inline-size}@container (max-width:349.98px){.globe-readout{display:none}}`}</style>
-      <div className="globe-ovl" style={{ position:'absolute', top:14, left:16, right:16, display:'flex', justifyContent:'space-between', zIndex:4, pointerEvents:'none' }}>
+      {/* Phones (portrait, and landscape touch screens under 500px tall): the
+          overlay text goes from 10-10.5px to 11px; the legend's tracking and
+          gaps tighten so it stays the same width (clear of the readout). The
+          taller labels no longer fit the strips above and below the sphere
+          (7% of the width), so title, legend and readout sit at the very top
+          and bottom edge (2px), clear of the sphere.
+          Any globe under 350px (phones, two-column tablets): the same edge
+          positions, and the legend keeps one row (tighter gaps).
+          Under 270px (Galaxy Fold cover) both run edge to edge, centred. */}
+      <style>{`.globe-root{container-type:inline-size}
+@media (max-width:600px),(pointer:coarse) and (max-height:500px){.globe-head>span,.globe-legend,.globe-readout{font-size:11px!important}.globe-legend{gap:10px!important;letter-spacing:.04em!important}.globe-head{top:2px!important}.globe-legend,.globe-readout{bottom:2px!important}}
+@container (max-width:349.98px){.globe-readout{display:none}.globe-head{top:2px!important}.globe-legend{bottom:2px!important;gap:8px!important;letter-spacing:.04em!important;flex-wrap:nowrap!important}.globe-legend>span{gap:4px!important}}
+@container (max-width:269.98px){.globe-head,.globe-legend{left:0!important;right:0!important;max-width:none!important;justify-content:center!important}}`}</style>
+      <div className="globe-ovl globe-head" style={{ position:'absolute', top:14, left:16, right:16, display:'flex', justifyContent:'space-between', zIndex:4, pointerEvents:'none' }}>
         <span style={{ display:'inline-flex', alignItems:'center', gap:8, fontFamily:'Inter, sans-serif', fontSize:10.5, letterSpacing:'0.14em', textTransform:'uppercase', color:'#A8A8A8' }}>
           <span style={{ width:7, height:7, borderRadius:'50%', background:'#FCBD00', boxShadow:'0 0 8px rgba(252,189,0,0.6)' }} />Live incidents · 18 Jun 2026
         </span>
       </div>
       <canvas ref={canvasRef} style={{ display:'block', width:'100%', height:'100%', cursor:'grab' }} aria-label="Live rotating globe of classified incidents — drag to rotate, scroll to zoom" />
-      <div className="globe-ovl" style={{ position:'absolute', left:16, bottom:14, maxWidth:'calc(100% - 32px)', display:'flex', gap:14, zIndex:4, fontFamily:'Inter, sans-serif', fontSize:10, letterSpacing:'0.08em', textTransform:'uppercase', color:'#6a6a6a', flexWrap:'wrap', pointerEvents:'none' }}>
+      <div className="globe-ovl globe-legend" style={{ position:'absolute', left:16, bottom:14, maxWidth:'calc(100% - 32px)', display:'flex', gap:14, zIndex:4, fontFamily:'Inter, sans-serif', fontSize:10, letterSpacing:'0.08em', textTransform:'uppercase', color:'#6a6a6a', flexWrap:'wrap', pointerEvents:'none' }}>
         <span style={{ display:'inline-flex', alignItems:'center', gap:5 }}><i style={{ width:7, height:7, borderRadius:'50%', background:'#FF453A', display:'inline-block' }} />Critical</span>
         <span style={{ display:'inline-flex', alignItems:'center', gap:5 }}><i style={{ width:7, height:7, borderRadius:'50%', background:'#FF6B35', display:'inline-block' }} />High</span>
         <span style={{ display:'inline-flex', alignItems:'center', gap:5 }}><i style={{ width:7, height:7, borderRadius:'50%', background:'#FCBD00', display:'inline-block' }} />Medium</span>

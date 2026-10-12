@@ -75,7 +75,9 @@ const S = {
   card: { background: "#fff", border: `1px solid ${BRAND.line}`, borderRadius: 14, padding: "22px 22px 20px", display: "flex", flexDirection: "column", minWidth: 0, fontFamily: FONT },
   name: { fontFamily: FONT, fontSize: 17, fontWeight: 800, letterSpacing: "-0.01em", color: BRAND.ink, margin: 0 },
   price: { fontFamily: SERIF, fontSize: 34, lineHeight: 1, fontWeight: 600, color: BRAND.ink, marginTop: 10 },
-  period: { fontFamily: MONO, fontSize: 10, color: BRAND.muted, marginLeft: 8, letterSpacing: ".06em" },
+  // inline-block + nowrap: "per month" never splits; if it does not fit beside
+  // the price it moves under it as one piece.
+  period: { fontFamily: MONO, fontSize: 10, color: BRAND.muted, marginLeft: 8, letterSpacing: ".06em", whiteSpace: "nowrap", display: "inline-block" },
   note: { fontFamily: MONO, fontSize: 9.5, color: BRAND.muted, marginTop: 6 },
   pitch: { fontSize: 13, color: BRAND.inkSoft, margin: "10px 0 0", lineHeight: 1.5 },
   list: { listStyle: "none", padding: 0, margin: "16px 0 18px", display: "grid", gap: 8, flex: 1, alignContent: "start" },
@@ -141,10 +143,23 @@ export function SubscriptionPlans({ embedded = false, onSignIn, onDashboard }) {
           mouse laptops and desktops keep the design sizes. The third
           Premium card spans the row while the Premium grid has exactly two
           columns, so it does not sit alone (container query on the dark box's
-          content width: 2 x 280 + 14 = 574 up to 3 x 280 + 2 x 14 = 868). */}
+          content width: 2 x 280 + 14 = 574 up to 3 x 280 + 2 x 14 = 868).
+          Phones (portrait, and landscape touch screens under 500px tall): the
+          eyebrows, the Recommended / Pro tags and "per month" go from 9-10px
+          to 11px; the plan name row may wrap so the larger tag never runs
+          past the card edge (it drops under the name on a 280px screen). */}
       <style>{`
         @media (max-width: 768px), (pointer: coarse) {
           .sub-fine { font-size: 12px !important; line-height: 1.45 !important; }
+        }
+        @media (max-width: 600px), (pointer: coarse) and (max-height: 500px) {
+          .sub-eyebrow, .sub-tag, .sub-period { font-size: 11px !important; }
+          .sub-head { flex-wrap: wrap; row-gap: 6px !important; }
+        }
+        /* Under 300px "per month" cannot sit beside ₹14,999: the period goes
+           under the price in both cards, without the 8px indent. */
+        @media (max-width: 300px) {
+          .sub-period { display: block !important; margin: 6px 0 0 !important; }
         }
         @container (min-width: 574px) and (max-width: 867.98px) {
           .sub-premium > article:nth-child(3) { grid-column: 1 / -1; }
@@ -152,7 +167,7 @@ export function SubscriptionPlans({ embedded = false, onSignIn, onDashboard }) {
       `}</style>
       {/* 1 · Attack Map */}
       <section style={{ ...S.section, paddingTop: embedded ? 4 : 34 }}>
-        <div style={S.eyebrow}>Attack Map · industry intelligence</div>
+        <div className="sub-eyebrow" style={S.eyebrow}>Attack Map · industry intelligence</div>
         <h2 style={S.h2}>Free shows what happened. Subscriber shows who it reaches.</h2>
         <p style={S.lede}>Both run on the same corpus, classified through GUARD and geolocated on the live map. Subscriber switches on now and switches off any time; nothing to apply for.</p>
         {msg && <p style={{ margin: "16px 0 0", fontSize: 13, fontWeight: 600, color: msg.ok ? "#1E7A3D" : "#B21F31" }}>{msg.text}</p>}
@@ -162,11 +177,11 @@ export function SubscriptionPlans({ embedded = false, onSignIn, onDashboard }) {
             const current = isSub ? subscriber : (!!user && !subscriber);
             return (
               <article key={p.id} style={{ ...S.card, ...(isSub ? { borderColor: BRAND.gold, boxShadow: "0 18px 44px rgba(252,189,0,.14)", background: "#FFFDF5" } : {}) }}>
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+                <div className="sub-head" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
                   <h3 style={S.name}>{p.name}</h3>
-                  {isSub ? <span style={S.tag}>Recommended</span> : current ? <span style={S.tag}>Your plan</span> : null}
+                  {isSub ? <span className="sub-tag" style={S.tag}>Recommended</span> : current ? <span className="sub-tag" style={S.tag}>Your plan</span> : null}
                 </div>
-                <div style={S.price}>{p.price}<span style={S.period}>{p.period}</span></div>
+                <div style={S.price}>{p.price}<span className="sub-period" style={S.period}>{p.period}</span></div>
                 {p.note && <div className="sub-fine" style={S.note}>{p.note}</div>}
                 <p style={S.pitch}>{p.pitch}</p>
                 <ul style={S.list}>{p.includes.map((f) => <li key={f} style={S.li}><span style={S.tick}>✓</span><span>{f}</span></li>)}</ul>
@@ -199,7 +214,7 @@ export function SubscriptionPlans({ embedded = false, onSignIn, onDashboard }) {
       <section style={{ ...S.section, paddingTop: 10, paddingBottom: embedded ? 20 : 56 }}>
         <div style={{ background: BRAND.obsidian, color: "#fff", borderRadius: 16, padding: "28px clamp(16px, 10vw - 13px, 26px) 26px", position: "relative", overflow: "hidden", containerType: "inline-size" }}>
           <div style={{ position: "absolute", inset: 0, background: "radial-gradient(circle at 85% 20%, rgba(252,189,0,.16), transparent 30%)", pointerEvents: "none" }} />
-          <div style={{ ...S.eyebrow, color: BRAND.gold }}>♛ Organisation intelligence · Premium</div>
+          <div className="sub-eyebrow" style={{ ...S.eyebrow, color: BRAND.gold }}>♛ Organisation intelligence · Premium</div>
           <h2 style={{ ...S.h2, color: "#fff", textWrap: "balance" }}>Industry intelligence first. Organisation intelligence when you need it.</h2>
           <p style={{ ...S.lede, color: "rgba(255,255,255,.72)" }}>Free and Subscriber keep you informed at sector level. Premium adds your organisation: its suppliers, dependencies, materiality and controls — what an incident could mean for you, not just for your industry.</p>
           <div className="sub-premium" style={S.grid(280)}>
@@ -207,7 +222,7 @@ export function SubscriptionPlans({ embedded = false, onSignIn, onDashboard }) {
               <article key={p.key} style={{ ...S.card, background: "rgba(255,255,255,.04)", borderColor: "rgba(255,255,255,.12)", color: "#fff" }}>
                 <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10 }}>
                   <h3 style={{ ...S.name, color: "#fff", fontSize: 15 }}>{p.name}</h3>
-                  <span style={{ ...S.tag, background: "rgba(252,189,0,.14)", borderColor: "rgba(252,189,0,.4)", color: BRAND.gold }}>Pro</span>
+                  <span className="sub-tag" style={{ ...S.tag, background: "rgba(252,189,0,.14)", borderColor: "rgba(252,189,0,.4)", color: BRAND.gold }}>Pro</span>
                 </div>
                 <p style={{ ...S.pitch, color: "#fff", fontWeight: 600, marginTop: 12 }}>{p.lead}</p>
                 <p style={{ ...S.pitch, color: "rgba(255,255,255,.66)", marginTop: 6, flex: 1 }}>{p.body}</p>
@@ -236,7 +251,7 @@ export function SubscribePage() {
       <SiteNav active="pricing" />
       <header style={{ background: BRAND.obsidian, color: "#fff", padding: "54px 24px 46px", borderBottom: `1px solid ${BRAND.border}` }}>
         <div style={{ maxWidth: 1132, margin: "0 auto" }}>
-          <div style={{ ...S.eyebrow, color: BRAND.gold }}>Subscribe · Attacked.ai</div>
+          <div className="sub-eyebrow" style={{ ...S.eyebrow, color: BRAND.gold }}>Subscribe · Attacked.ai</div>
           <h1 style={{ fontFamily: SERIF, fontSize: "clamp(36px, 11vw, 52px)", lineHeight: 1.02, fontWeight: 500, margin: "10px 0 14px", letterSpacing: "-0.015em", maxWidth: 820 }}>One corpus. Three ways in.</h1>
           <p style={{ ...S.lede, color: "rgba(255,255,255,.72)", fontSize: 16 }}>The Attack Map for your industry, the organisation-level intelligence behind it, and the reports, listings and licences that stand on their own.</p>
           {user && <div style={{ marginTop: 18, fontFamily: MONO, fontSize: 11, color: "rgba(255,255,255,.6)" }}>Signed in as {user.email} · {subscriber ? "Subscriber" : "Free"}</div>}
