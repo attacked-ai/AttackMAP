@@ -16,5 +16,6 @@ Thumbs.db
 
 # Baked incident reports (81MB) — served statically/deployed, not version-controlled
 public/reports/
+public/reports-full/
 __pycache__/
 *.pyc

@@ -1,6 +1,11 @@
-// reportLock.js — the free-reader gate for the 310 baked reports
-// (public/reports/<ref>.html), shared by the dashboard's report view and the
-// public Attacked Hub so the two never disagree about what is free.
+// reportLock.js — what the host page does inside a report frame, shared by
+// the dashboard's report view and the public Attacked Hub.
+//
+// The real paywall is server-side since 2026-10-15: a free reader is only
+// ever sent the preview (header, key figures, Executive Summary — see
+// src/lib/reportPreview.js and middleware.js), so the full text never reaches
+// their browser. The section lock below stays as a second layer for any HTML
+// that still arrives whole (the API, a CMS report without a preview).
 //
 // The rule is the product's rule: what happened is free; who it reaches and
 // what to do about it is subscriber. Inside a report that is three sections —
@@ -177,6 +182,13 @@ export function prepareReportFrame(frame, { subscriber, onSubscribe, readerName 
     host.addEventListener("resize", keep);
   }
   if (frame.__pillKeep) frame.__pillKeep();
+  // The editorial v3 shell (the NATS briefing) ships its header Download PDF
+  // hidden; a subscriber gets it (browser print → Save as PDF).
+  if (subscriber && doc.querySelector(".hdr-btn#readerPrint") && !doc.getElementById("attacked-sub-pdf")) {
+    const st = doc.createElement("style"); st.id = "attacked-sub-pdf";
+    st.textContent = "#readerPrint{display:inline-flex!important}";
+    doc.head.appendChild(st);
+  }
   if (!subscriber) lockReportForFreeReader(doc, onSubscribe);
   return true;
 }

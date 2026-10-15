@@ -13,6 +13,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../lib/supabaseClient";
 import { adminDeleteReport, adminGetReport, adminListReports, adminSetReportStatus, adminUpsertReport, makeReportRef, uploadReportHero } from "../lib/reports";
 import { DEFAULT_BRAND, REPORT_FONTS, REPORT_SECTIONS, applyBrandToHtml, renderReport, reportMetaFromHtml } from "../lib/reportTemplate";
+import { makeReportPreview, stubPreview } from "../lib/reportPreview";
 import { CATEGORIES, INDUSTRIES } from "../lib/taxonomy";
 import { ReportPageEditor } from "./ReportPageEditor";
 
@@ -114,13 +115,21 @@ export function AdminReports() {
   function payload() {
     const ref = data.ref.trim() || makeReportRef(data.title);
     const html = data.mode === "html" ? applyBrandToHtml(data.uploadedHtml, brand) : renderReport({ ...data, ref }, brand);
+    // The free-reader copy (header + Executive Summary), saved next to the full
+    // HTML: report_html hands it to anyone who is not a subscriber. An upload
+    // in a shell the cutter does not know gets the title-only stub.
+    let html_preview;
+    if (data.mode === "html") {
+      try { html_preview = makeReportPreview(html).html; }
+      catch { html_preview = stubPreview({ ref, title: data.title, subtitle: data.subtitle, summary: data.dek }); }
+    } else html_preview = renderReport({ ...data, ref }, brand, { preview: true });
     return {
       ...(editing?.id ? { id: editing.id } : {}),
       ref, title: data.title.trim() || "Untitled report", subtitle: data.subtitle || null, summary: (data.sections.summary || "").slice(0, 600) || data.dek || null,
       industry: data.industry || null, primary_category: data.category || null, severity: Number(data.severity) || null,
       incident_id: data.incidentId ? Number(data.incidentId) : null, hero_image_url: data.heroImageUrl || null, author: data.author || null,
       tags: data.tags.split(",").map((t) => t.trim()).filter(Boolean),
-      data: { ...data, ref, uploadedHtml: undefined }, brand, html,
+      data: { ...data, ref, uploadedHtml: undefined }, brand, html, html_preview,
     };
   }
   async function save(publish = null) {

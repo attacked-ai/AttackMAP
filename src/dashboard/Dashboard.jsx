@@ -25,7 +25,7 @@ import { loadCounts, loadIncidentDetail, loadIndustry, loadIndustryExtras, loadR
 import { incidentImage, incidentPhoto, industryPhoto } from "../lib/images";
 import { prepareReportFrame } from "../lib/reportLock";
 import { reportHtml } from "../lib/api";
-import { fetchReportHtml } from "../lib/reports";
+import { fetchFullReport, fetchReportHtml } from "../lib/reports";
 import "./dashboard.css";
 
 const DEFAULT_INDUSTRY = "Automotive & EV";
@@ -250,23 +250,28 @@ function YourIndustry({ P, name, subscriber, query, onOpen, onSubscribe, go }) {
 // it. The nav's "Manage subscription" lands here (?subscriptions → alerts).
 function ReportFrame({ i, reportRef, subscriber, onSubscribe, readerName }) {
   const ref = useRef(null);
+  const { loading: authLoading } = useAuth();   // decide only once the tier is known
   // The report scrolls inside its own .reader wrapper (body overflow hidden),
   // so the frame fills the viewport below the bar and the report scrolls
   // within it — the same framing the ?hub page uses.
   const [h, setH] = useState(800);
   // With the API on, the report arrives with the lock already applied by the
   // server and is shown through srcdoc (same-origin, so the frame can still be
-  // reached). Off, or unreachable: the static file plus the client-side lock.
+  // reached). Off, or unreachable: a subscriber gets the full baked file from
+  // the gated /reports-full/, everyone else the preview at /reports/.
   const [doc, setDoc] = useState(undefined);
   useEffect(() => {
+    if (authLoading) return;
     let dead = false; setDoc(undefined);
-    // CMS report (hub_reports, via src/lib/reports.js) → API → static file.
+    // CMS report (hub_reports, via src/lib/reports.js; the database hands a
+    // free reader the preview) → API → full file (subscribers) → preview.
     fetchReportHtml(reportRef)
       .then((cms) => cms || reportHtml(reportRef))
+      .then((html) => html || (subscriber ? fetchFullReport(reportRef) : null))
       .then((html) => { if (!dead) setDoc(html || null); })
       .catch(() => { if (!dead) setDoc(null); });
     return () => { dead = true; };
-  }, [reportRef]);
+  }, [reportRef, subscriber, authLoading]);
   // Frame height: the room under the report bar at the top of the page, so
   // the whole report view fits the screen and only the frame scrolls. Where
   // that room is too short to read in (landscape phones), the frame instead

@@ -17,7 +17,7 @@ import { supabase } from "../lib/supabaseClient";
 import { isSubscriber } from "../lib/taxonomy";
 import { prepareReportFrame } from "../lib/reportLock";
 import { reportHtml } from "../lib/api";
-import { fetchReportHtml, listPublishedReports } from "../lib/reports";
+import { fetchFullReport, fetchReportHtml, listPublishedReports } from "../lib/reports";
 import { useAuth } from "./AuthProvider";
 import { AuthModal } from "./AuthModal";
 import { SiteNav } from "./SiteNav";
@@ -505,31 +505,36 @@ function ArticleView({ article, onBack, onMap, user }) {
 // (public/reports/<id>.html), render that exact report inside the hub via an
 // iframe, with a slim back/CTA bar on top. Faithful to the baked design; no
 // re-rendering. Falls back to ArticleView when no report file exists.
-// Free readers get the report with the three subscriber sections locked
-// (src/lib/reportLock.js — the same gate the dashboard applies), so the public
-// Hub is not a way around the paywall.
-function ReportFrame({ article, onBack, onMap, user, subscriber }) {
+// Free readers get the PREVIEW — header, key figures and the Executive
+// Summary, Download PDF off (scripts/build-report-previews.mjs); the full
+// report reaches subscribers only, through the server gate. The public Hub is
+// not a way around the paywall.
+function ReportFrame({ article, onBack, onMap, user, subscriber, authReady }) {
   const ref = useRef(null);
   const reportRef = article.reportRef || article.id;
   // Where the HTML comes from, in order:
-  //   1. the reports CMS (public.hub_reports_public + report_html) — authored
-  //      in the admin console, published only;
+  //   1. the reports CMS (report_html) — authored in the admin console,
+  //      published only; the database hands a free reader the preview;
   //   2. the API, which applies the subscriber lock server-side;
-  //   3. the static file baked at public/reports/<ref>.html.
-  // 1 and 2 render through srcdoc, which keeps the frame same-origin so
-  // prepareReportFrame can still lock r-blast / r-ctrl / r-vend for free
-  // readers — the CMS renderer emits the same shell and section ids.
+  //   3. a subscriber: the full baked file from /reports-full/ (gated);
+  //   4. everyone else: the preview baked at public/reports/<ref>.html.
+  // 1-3 render through srcdoc, which keeps the frame same-origin so
+  // prepareReportFrame can still reach in (licence line, responsive layer).
+  // Nothing is fetched until the session has settled, so a subscriber never
+  // sees the preview flash first and a tier change re-fetches.
   const [doc, setDoc] = useState(undefined);
   useEffect(() => {
+    if (!authReady) return;
     let dead = false; setDoc(undefined);
     (async () => {
       let html = null;
       try { html = await fetchReportHtml(reportRef); } catch { /* not a CMS report */ }
       if (!html) { try { html = await reportHtml(reportRef); } catch { /* API off or refused */ } }
+      if (!html && subscriber) html = await fetchFullReport(reportRef);
       if (!dead) setDoc(html || null);
     })();
     return () => { dead = true; };
-  }, [reportRef]);
+  }, [reportRef, subscriber, authReady]);
   useEffect(() => {
     const fr = ref.current; if (!fr) return;
     const onLoad = () => { prepareReportFrame(fr, { subscriber, onSubscribe: () => { window.location.href = "/?subscribe"; }, readerName: user?.email || "" }); };
@@ -608,7 +613,7 @@ function shapeRow(r, reportByIncident = {}) {
 }
 
 export function AttackHub() {
-  const { user, tier } = useAuth();
+  const { user, tier, loading: authLoading } = useAuth();
   const [authOpen, setAuthOpen] = useState(false);
   const [reportIds, setReportIds] = useState(null);  // Set of incident ids with a baked report
   const [articles, setArticles] = useState([]);
@@ -910,7 +915,7 @@ export function AttackHub() {
         // Resolve the ref at render time: the manifest can arrive after the
         // incident rows did, so the row's own reportRef may still be null.
         (() => { const ref = selected.reportRef || reportByIncident[String(selected.id)] || null; return reportIds && ref && reportIds.has(ref); })()
-          ? <ReportFrame article={{ ...selected, reportRef: selected.reportRef || reportByIncident[String(selected.id)] }} onBack={() => setSelected(null)} onMap={openMap} user={user} subscriber={isSubscriber(tier)} />
+          ? <ReportFrame article={{ ...selected, reportRef: selected.reportRef || reportByIncident[String(selected.id)] }} onBack={() => setSelected(null)} onMap={openMap} user={user} subscriber={isSubscriber(tier)} authReady={!authLoading} />
           : <ArticleView article={selected} onBack={() => setSelected(null)} onMap={openMap} user={user} />
       ) : (
         <>

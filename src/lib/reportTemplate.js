@@ -13,6 +13,7 @@
 import { marked } from "marked";
 import { REPORT_SHELL_CSS } from "./reportShellCss";
 import { REPORT_RESPONSIVE_CSS } from "./reportLock";
+import { PREVIEW_MARK, PRINT_BLOCK_CSS, SUBSCRIBE_JS } from "./reportPreview";
 
 export const REPORT_SECTIONS = [
   { id: "r-sum",     num: "",   eyebrow: "Executive summary",                         title: "",                                     key: "summary",     hint: "The bottom line. 3–6 short paragraphs or bullets. Always shown first." },
@@ -114,19 +115,26 @@ const SHELL_JS = `
 
 // data: { ref, title, subtitle, dek, author, authorTitle, assessedAt, severity, confidence,
 //         industry, category, status, takeaway, heroImageUrl, sections: { summary, severity, ... } }
-export function renderReport(data = {}, brand = {}) {
+// { preview: true } renders the free-reader copy saved alongside (html_preview):
+// the header, dossier and Executive Summary, then a Subscribe band in place of
+// every other section, the takeaway and the Download PDF buttons.
+export function renderReport(data = {}, brand = {}, { preview = false } = {}) {
   const b = { ...DEFAULT_BRAND, ...(brand || {}) };
   const font = REPORT_FONTS.find((f) => f.id === b.font) || REPORT_FONTS[0];
   const sev = Number(data.severity) || 3;
   const sections = data.sections || {};
-  const present = REPORT_SECTIONS.filter((s) => String(sections[s.key] || "").trim());
+  const present = REPORT_SECTIONS.filter((s) => (!preview || s.key === "summary") && String(sections[s.key] || "").trim());
+  const pdfBtn = (cls) => preview
+    ? `<button class="r-btn ${cls}" data-subscribe onclick="subscribe()">Subscribe · full report + PDF</button>`
+    : `<button class="r-btn ${cls}" data-print>↓ Download PDF</button>`;
   const initials = String(data.author || "AI").split(/\s+/).map((w) => w[0]).join("").slice(0, 2).toUpperCase() || "AI";
   const catName = CATEGORY_NAME[data.category] || data.category || "";
   const vitals = [
     ["Industry", data.industry], ["Category", catName ? `${data.category} · ${catName}` : ""], ["Confidence", data.confidence],
     ["Reference", data.ref], ["As of", data.assessedAt], ["Status", data.status || "Assessment v1 · point-in-time"],
   ].filter(([, v]) => v).map(([k, v]) => `<div class="r-vital"><span class="k">${esc(k)}</span><span class="v">${esc(v)}</span></div>`).join("");
-  const navItems = present.map((s) => `<button class="r-nav-item" data-target="${s.id}">${esc(s.title || s.eyebrow)}</button>`).join("");
+  const navItems = present.map((s) => `<button class="r-nav-item" data-target="${s.id}">${esc(s.title || s.eyebrow)}</button>`).join("")
+    + (preview ? `<button class="r-nav-item" data-target="r-lock">Full briefing · subscribers</button>` : "");
 
   const sectionHtml = present.map((s) => {
     const body = `<div class="r-body r-md">${md(sections[s.key])}</div>`;
@@ -136,12 +144,18 @@ export function renderReport(data = {}, brand = {}) {
       <h2 class="r-sec-title">${esc(s.title)}</h2>
       ${body}
     </section>`;
-  }).join("\n");
+  }).join("\n") + (preview ? `
+    <section class="r-sec r-lock" id="r-lock" ${PREVIEW_MARK}>
+      <div class="r-sec-head"><span class="r-sec-num">01-10</span><span class="r-sec-eyebrow">Subscriber briefing</span></div>
+      <h2 class="r-sec-title">The full briefing is for subscribers</h2>
+      <p class="r-sec-note">Severity assessment, causal analysis, comparables, frameworks, blast radius, GUARD controls, vendor intelligence, outlook, scenarios, analyst verdict, board takeaway, sources and the Download PDF.</p>
+      <button class="r-btn primary" data-subscribe onclick="subscribe()">Subscribe to read the full briefing</button>
+    </section>` : "");
 
   const railLeft = `<aside class="r-rail r-rail-left">
     <div class="r-rail-block"><span class="r-sevpill"><span class="d"></span>SEV ${sev} · ${esc(SEV[sev] || "")}</span><span class="r-status"><span class="d"></span>${esc(data.status || "Assessment v1")}</span></div>
     <div class="r-rail-block"><div class="r-rail-h">Dossier</div><div class="r-vitals">${vitals}</div></div>
-    <div class="r-rail-cta"><p>${b.showBrandFooter ? "An Attacked.ai intelligence briefing — point-in-time, subject to revision as facts emerge." : "Point-in-time intelligence briefing."}</p><button class="r-btn primary" data-print>↓ Download PDF</button></div>
+    <div class="r-rail-cta"><p>${b.showBrandFooter ? "An Attacked.ai intelligence briefing — point-in-time, subject to revision as facts emerge." : "Point-in-time intelligence briefing."}</p>${pdfBtn("primary")}</div>
   </aside>`;
   const railRight = `<aside class="r-rail r-rail-right"><div class="r-rail-block"><div class="r-rail-h">Contents</div><div class="r-nav">${navItems}</div></div></aside>`;
 
@@ -158,8 +172,8 @@ export function renderReport(data = {}, brand = {}) {
     <p class="r-assessment">As of ${esc(data.assessedAt || new Date().toUTCString().slice(5, 16))} · Point-in-time, subject to revision as facts emerge · Change-controlled</p>
     ${data.heroImageUrl ? `<img class="r-hero" src="${esc(data.heroImageUrl)}" alt="">` : ""}
     ${sectionHtml}
-    ${data.takeaway ? `<section class="r-sec" id="r-board" style="border-top:0;padding-top:0;margin-top:44px"><div class="r-takeaway"><div class="r-takeaway-h">Board takeaway</div><p>${esc(data.takeaway)}</p></div></section>` : ""}
-    <div class="r-end"><div class="r-end-eyebrow">${esc(data.ref || "")}</div><h3>${esc(b.kicker || "Confidential intelligence briefing")}</h3><p>This briefing is a point-in-time assessment. Blast radius, GUARD controls and vendor intelligence are subscriber sections on the Attacked Hub.</p><button class="r-btn" data-print>↓ Download PDF</button></div>
+    ${data.takeaway && !preview ? `<section class="r-sec" id="r-board" style="border-top:0;padding-top:0;margin-top:44px"><div class="r-takeaway"><div class="r-takeaway-h">Board takeaway</div><p>${esc(data.takeaway)}</p></div></section>` : ""}
+    <div class="r-end"><div class="r-end-eyebrow">${esc(data.ref || "")}</div><h3>${esc(b.kicker || "Confidential intelligence briefing")}</h3><p>This briefing is a point-in-time assessment. Blast radius, GUARD controls and vendor intelligence are subscriber sections on the Attacked Hub.</p>${pdfBtn("")}</div>
     ${b.showBrandFooter ? `<div class="r-foot">Attacked<span class="ai">.ai</span> — ${esc(b.kicker || "Confidential Intelligence")} · Filed by ${esc(data.author || "Attacked.ai Intelligence")} · ${esc(data.assessedAt || "")}</div>` : ""}
   </article>`;
 
@@ -168,27 +182,27 @@ export function renderReport(data = {}, brand = {}) {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Attacked.ai · Intelligence Briefing — ${esc(data.title || "")}</title>
+<title>Attacked.ai · Intelligence Briefing — ${esc(data.title || "")}${preview ? " · Preview" : ""}</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=${font.gf}&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>${REPORT_SHELL_CSS}</style>
 <style>${brandCss(b)}</style>
-<style id="attacked-resp">${REPORT_RESPONSIVE_CSS}</style>
+<style id="attacked-resp">${REPORT_RESPONSIVE_CSS}</style>${preview ? `<style>${PRINT_BLOCK_CSS}</style>` : ""}
 </head>
 <body>
 <div class="reader open" id="reader" aria-label="Intelligence briefing — ${esc(data.title || "")}">
   <div class="r-progress" id="rProgress"></div>
   <div class="reader-bar">
     <button class="r-bar-back" id="rBack">← Back</button>
-    <div class="reader-actions"><button class="r-btn ghost" data-print>↓ Download PDF</button></div>
+    <div class="reader-actions">${preview ? `<button class="r-btn ghost" data-subscribe onclick="subscribe()">Subscribe for the PDF</button>` : `<button class="r-btn ghost" data-print>↓ Download PDF</button>`}</div>
   </div>
   <div class="reader-scroll" id="readerScroll">
     <div class="r-doc" id="readerArticle">${railLeft}${article}${railRight}</div>
   </div>
   <div class="r-mobnav" id="rMobNav"><div class="r-mobnav-sheet" id="rMobSheet"><div class="r-mobnav-sheet-h">Jump to section</div><div id="rMobList"></div></div><button class="r-mobnav-pill" id="rMobPill" type="button"><span class="rm-ic">&#9776;</span><span class="rm-txt"><span class="rm-lab">Reading now</span><span class="rm-cur" id="rMobCur">${esc(present[0]?.title || present[0]?.eyebrow || "Contents")}</span></span><span class="rm-chev">&#8963;</span></button></div>
 </div>
-<script>${SHELL_JS}</script>
+<script>${SHELL_JS}${preview ? SUBSCRIBE_JS : ""}</script>
 </body>
 </html>`;
 }
