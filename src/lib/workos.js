@@ -11,7 +11,9 @@
 //   takeReturn()                 the token a provider trip brought back (#wos_token=…)
 //   savePending / takePending    sign-up form details kept across a provider trip
 
-export const WORKOS = import.meta.env.VITE_AUTH_PROVIDER === "workos";
+// Trimmed: a value saved with a trailing newline (e.g. piped in from
+// PowerShell's echo) must still count.
+export const WORKOS = String(import.meta.env.VITE_AUTH_PROVIDER || "").trim().toLowerCase() === "workos";
 
 const BRIDGE = `${String(import.meta.env.VITE_SUPABASE_URL || "").replace(/\/$/, "")}/functions/v1/workos-auth`;
 
