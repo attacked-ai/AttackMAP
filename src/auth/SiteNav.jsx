@@ -56,7 +56,9 @@ export function SiteNav({ active }) {
   return (
     <>
       <header role="banner" className="site-nav">
-        <a href="/" aria-label="Attacked.ai home" className="site-brand" onClick={brandClick}>
+        {/* ?home, not "/": for a signed-in reader "/" opens the dashboard,
+            and the logo is the way back to the landing page. */}
+        <a href="/?home" aria-label="Attacked.ai home" className="site-brand" onClick={brandClick}>
           <img src="/attacked-ai-logo.svg" alt="" className="shield" />
           <span className="wordmark">Attacked<span className="ai">.ai</span><sup>™</sup></span>
         </a>

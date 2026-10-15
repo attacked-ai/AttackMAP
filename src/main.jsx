@@ -182,7 +182,7 @@ function AppShell() {
           <div style={{ fontSize: 13, marginBottom: 20, maxWidth: 380 }}>
             This page is restricted to the internal team. Your current tier is <b>{tier || "free"}</b>.
           </div>
-          <a href="/" style={{
+          <a href="/?map" style={{
             padding: "10px 20px", background: "#FCBD00", color: "#1A1A1A",
             textDecoration: "none", borderRadius: 4, fontSize: 12,
             fontWeight: 700, letterSpacing: "0.10em", textTransform: "uppercase",
