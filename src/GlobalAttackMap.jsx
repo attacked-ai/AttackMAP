@@ -1153,7 +1153,11 @@ async function _fetchSupabaseTable(url, key, table, query = "") {
 // Now: ONE download per page load, shared by both callers, and a 15-minute
 // copy in the browser's Cache Storage so a reload does not download it again.
 // Only signed-out loads are kept, and only when every page came back.
-const INCIDENT_LIST_COLS = "id,headline,summary,entity,sector,industry,location_name,country,latitude,longitude,event_date,disclosure_date,incident_day,primary_category,primary_subcategory_code,primary_subcategory_name,severity,severity_rationale,confidence,image_url";
+// The long text (summary 3.3 MB, severity_rationale 1.7 MB) is left out of the
+// list: 6.6 MB -> 1.5 MB per load (2026-10-15). The incident someone opens
+// fetches its own (useIncidentText), and the search box finds words in
+// summaries through useSummarySearch.
+const INCIDENT_LIST_COLS = "id,headline,entity,sector,industry,location_name,country,latitude,longitude,event_date,disclosure_date,incident_day,primary_category,primary_subcategory_code,primary_subcategory_name,severity,confidence,image_url";
 const INCIDENT_CACHE = "attacked-incidents-v1";
 const INCIDENT_CACHE_TTL_MS = 15 * 60 * 1000;
 let _incidentRowsP = null;
@@ -1202,6 +1206,81 @@ function _fetchIncidentRows(url, key) {
   }
   // Callers add fields to the rows, so each gets its own shallow copies.
   return _incidentRowsP.then((rows) => rows.map((r) => ({ ...r })));
+}
+
+function _restUrl(path) {
+  const env = (typeof import.meta !== "undefined" && import.meta.env) || {};
+  const url = env.VITE_SUPABASE_URL, key = env.VITE_SUPABASE_ANON_KEY;
+  if (!url || !key || typeof fetch !== "function") return null;
+  return {
+    href: `${url.replace(/\/$/, "")}/rest/v1/${path}`,
+    headers: { apikey: key, Authorization: `Bearer ${_readerToken || key}` },
+  };
+}
+
+// One incident's summary + severity_rationale (a few KB), kept for the visit.
+// A failed fetch is forgotten so the next open tries again.
+const _incidentText = new Map();
+function _fetchIncidentText(id) {
+  if (!_incidentText.has(id)) {
+    const req = _restUrl(`incidents?select=summary,severity_rationale&id=eq.${encodeURIComponent(id)}&limit=1`);
+    const p = !req ? Promise.resolve(null) : fetch(req.href, { headers: req.headers })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((rows) => (Array.isArray(rows) && rows[0]) || null)
+      .catch(() => null);
+    p.then((t) => { if (!t) _incidentText.delete(id); });
+    _incidentText.set(id, p);
+  }
+  return _incidentText.get(id);
+}
+
+// The opened incident, with its text once it arrives (the panel renders at
+// once; the text fills in). Incidents that already carry their text, such as
+// the baked sweeps, are returned as they are.
+function useIncidentText(incident) {
+  const id = incident?.id;
+  const missing = id != null && !("summary" in incident) && !("severity_rationale" in incident);
+  const [text, setText] = useState(null);
+  useEffect(() => {
+    if (!missing) return undefined;
+    let live = true;
+    _fetchIncidentText(id).then((t) => { if (live && t) setText({ id, ...t }); });
+    return () => { live = false; };
+  }, [id, missing]);
+  return useMemo(() => (
+    missing && text && text.id === id
+      ? { ...incident, summary: text.summary, severity_rationale: text.severity_rationale }
+      : incident
+  ), [incident, missing, text, id]);
+}
+
+// The search box matched summaries when the list carried them. It still does:
+// a typed query (3+ characters, after a pause) asks the database for the ids
+// whose summary contains it — ids only, a few KB. null until it answers.
+const _summaryHits = new Map();
+function useSummarySearch(query) {
+  const q = String(query || "").trim().toLowerCase();
+  const [hits, setHits] = useState(null);
+  useEffect(() => {
+    setHits(_summaryHits.get(q) || null);
+    if (q.length < 3 || _summaryHits.has(q)) return undefined;
+    let live = true;
+    const t = setTimeout(() => {
+      const req = _restUrl(`incidents?select=id&summary=ilike.${encodeURIComponent(`*${q}*`)}&limit=1000`);
+      if (!req) return;
+      fetch(req.href, { headers: req.headers })
+        .then((res) => (res.ok ? res.json() : null))
+        .then((rows) => {
+          if (!Array.isArray(rows)) return;
+          const ids = new Set(rows.map((r) => r.id));
+          _summaryHits.set(q, ids);
+          if (live) setHits(ids);
+        })
+        .catch(() => {});
+    }, 400);
+    return () => { live = false; clearTimeout(t); };
+  }, [q]);
+  return hits;
 }
 
 // Reshape a flat incidents row + its embedded child arrays into the nested
@@ -4663,7 +4742,9 @@ function MobileIncidentCards({ incident, cards, onClose, autoPlay, onSkip }) {
   );
 }
 
-function IncidentCascade({ incident, viewMode, onClose, autoPlay, onSkip }) {
+function IncidentCascade({ incident: listed, viewMode, onClose, autoPlay, onSkip }) {
+  // The map's list leaves the long text out; the opened incident fetches it.
+  const incident = useIncidentText(listed);
   if (!incident) return null;
   const sev = SEVERITY[incident.severity] || SEVERITY[3];
   const cat = CATEGORIES[incident._cat];
@@ -9118,6 +9199,7 @@ export default function GlobalAttackMap() {
   const [showFilterPopover, setShowFilterPopover] = useState(false);
   // v3 additions
   const [searchQuery, setSearchQuery] = useState(""); // substring search
+  const summaryHits = useSummarySearch(searchQuery);   // ids whose summary matches (not in the list)
 
   // v4 archive — persistent day-wise storage of uploaded sweeps. The index
   // is loaded once on mount and refreshed whenever a sweep is added or
@@ -9451,10 +9533,10 @@ export default function GlobalAttackMap() {
     }
     // Search filter (v3 — empty = all)
     if (searchQuery && searchQuery.trim()) {
-      filtered = filtered.filter(inc => searchMatches(inc, searchQuery));
+      filtered = filtered.filter(inc => searchMatches(inc, searchQuery) || !!summaryHits?.has(inc.id));
     }
     return filtered;
-  }, [incidents, activeCats, activeReporters, activeSeverities, activeConfidences, activeIndustries, activeCountries, searchQuery, reporters]);
+  }, [incidents, activeCats, activeReporters, activeSeverities, activeConfidences, activeIndustries, activeCountries, searchQuery, summaryHits, reporters]);
 
   const visibleCats = useMemo(() => new Set(visibleIncidents.map(i => i._cat)), [visibleIncidents]);
 
