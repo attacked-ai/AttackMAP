@@ -370,11 +370,20 @@ function lockDecor(META, ICON) {
   function bar() {
     var b = document.querySelector(".r-lockbar"), cta = document.getElementById("r-lockcta"), end = document.querySelector(".r-end, footer.end");
     if (!b || b.__on) return; b.__on = 1;
-    if (!cta || !window.IntersectionObserver) { b.classList.add("on"); return; }
-    var past = false, atEnd = false;
-    function upd() { b.classList.toggle("on", past && !atEnd); }
-    new IntersectionObserver(function (es) { es.forEach(function (e) { past = !e.isIntersecting && e.boundingClientRect.top < 0; }); upd(); }).observe(cta);
-    if (end) new IntersectionObserver(function (es) { es.forEach(function (e) { atEnd = e.isIntersecting; }); upd(); }).observe(end);
+    if (!cta) { b.classList.add("on"); return; }
+    // measured on every scroll (inner scrollers included), not on visibility
+    // changes: a jump from the contents list skips straight past the card
+    var queued = false;
+    function upd() {
+      queued = false;
+      var past = cta.getBoundingClientRect().bottom < 0;
+      var atEnd = end ? end.getBoundingClientRect().top < window.innerHeight : false;
+      b.classList.toggle("on", past && !atEnd);
+    }
+    function soon() { if (!queued) { queued = true; (window.requestAnimationFrame || setTimeout)(upd); } }
+    document.addEventListener("scroll", soon, { capture: true, passive: true });
+    window.addEventListener("resize", soon);
+    upd();
   }
   function deco() {
     var z = document.querySelector(".r-lockzone"); if (!z) return;
