@@ -32,6 +32,8 @@ const LOCK_CSS = `
 
 export function lockReportForFreeReader(doc, onSubscribe) {
   if (!doc || !doc.body) return 0;
+  // a preview (either design) is already cut down on the server side
+  if (doc.querySelector('[data-locked="preview"]')) return 0;
   if (!doc.getElementById("dash-lock-style")) {
     const st = doc.createElement("style"); st.id = "dash-lock-style"; st.textContent = LOCK_CSS;
     doc.head.appendChild(st);

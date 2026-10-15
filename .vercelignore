@@ -11,3 +11,7 @@ Attacked.ai Demo Script.docx
 
 # The FastAPI service is hosted separately, never as Vercel functions
 api/
+
+# Design-review copies (local only)
+public/reports-blur/
+review/

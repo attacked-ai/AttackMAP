@@ -509,6 +509,14 @@ function ArticleView({ article, onBack, onMap, user }) {
 // Summary, Download PDF off (scripts/build-report-previews.mjs); the full
 // report reaches subscribers only, through the server gate. The public Hub is
 // not a way around the paywall.
+// Design review (localhost only — import.meta.env.DEV is false in the live
+// build): ?design=blur shows the blurred-sections preview from
+// public/reports-blur/ instead of the live one.
+const PREVIEW_DIR = (() => {
+  if (!import.meta.env.DEV) return "reports";
+  try { return new URLSearchParams(window.location.search).get("design") === "blur" ? "reports-blur" : "reports"; } catch { return "reports"; }
+})();
+
 function ReportFrame({ article, onBack, onMap, user, subscriber, authReady }) {
   const ref = useRef(null);
   const reportRef = article.reportRef || article.id;
@@ -554,7 +562,7 @@ function ReportFrame({ article, onBack, onMap, user, subscriber, authReady }) {
       }}><span>← Back<span className="rf-long"> to the feed</span></span></button>
       {doc === undefined ? null : <iframe
         ref={ref}
-        {...(doc ? { srcDoc: doc } : { src: `/reports/${encodeURIComponent(reportRef)}.html` })}
+        {...(doc ? { srcDoc: doc } : { src: `/${PREVIEW_DIR}/${encodeURIComponent(reportRef)}.html` })}
         title={article.headline || article.id}
         className="rframe"
       />}
