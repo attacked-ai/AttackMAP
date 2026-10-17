@@ -17,6 +17,8 @@ import { AdminFeedback } from "./AdminFeedback";
 import { AdminBriefings } from "./AdminBriefings";
 import { AdminReports } from "./AdminReports";
 import { Logo } from "../auth/Logo";
+import { useAuth } from "../auth/AuthProvider";
+import { WORKOS } from "../lib/workos";
 import "./admin-responsive.css";
 
 const BRAND = {
@@ -107,6 +109,10 @@ function FontLoader() {
 }
 
 export function AdminDashboard() {
+  const { user } = useAuth();
+  // Set by the sign-in bridge: two-step verification is on, or the last
+  // sign-in used a passkey. A reminder only — not an access check.
+  const protectedAdmin = !!user?.app_metadata?.mfa_factor_id || user?.app_metadata?.auth_method === "Passkey";
   const [active, setActive] = useState(() => {
     try { return new URLSearchParams(window.location.search).get("tab") || "reports"; } catch { return "reports"; }
   });
@@ -157,6 +163,14 @@ export function AdminDashboard() {
           </a>
         </div>
       </header>
+
+      {WORKOS && !protectedAdmin && (
+        <div role="note" className="r-pad" style={{ padding: "10px 32px", background: "rgba(252,189,0,0.12)", borderBottom: `1px solid ${BRAND.borderGold}`, color: BRAND.white, fontSize: 13, lineHeight: 1.5 }}>
+          <strong style={{ color: BRAND.gold }}>Protect the admin console.</strong>{" "}
+          Turn on two-step verification in{" "}
+          <a href="/?profile#security" style={{ color: BRAND.gold, fontWeight: 700 }}>Profile → Security</a>, or sign in with a passkey. The admin console will soon require it.
+        </div>
+      )}
 
       {/* TAB BAR */}
       <nav className="r-pad r-scrollx adm-tabs" style={{

@@ -12,6 +12,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { useAuth } from "./AuthProvider";
 import { SiteNav } from "./SiteNav";
 import { SiteFooter } from "./SiteFooter";
+import { SecurityPanel } from "./SecurityPanel";
 
 const C = {
   paper: "#FFFFFF", paper2: "#FAFAFA", ink: "#101010", ink2: "#52525B", ink3: "#6A6A6A",
@@ -229,6 +230,8 @@ export function ProfilePage() {
           <ReadRow k="Function" v={meta.job_function} />
           {memberSince && <ReadRow k="Member since" v={memberSince} />}
         </div>
+
+        <SecurityPanel />
 
         {/* Quick links */}
         <div style={{ marginTop: 22, display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center" }}>

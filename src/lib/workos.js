@@ -130,3 +130,30 @@ export function takePending() {
     return p && p.fields && Date.now() - p.at < 30 * 60_000 ? p.fields : null;
   } catch { return null; }
 }
+
+// Account security — two-step verification (an authenticator-app code) — as
+// the signed-in reader, through the bridge's /security routes. The reader's
+// Supabase access token proves who is asking; WorkOS keeps the factor and asks
+// for its code on the sign-in page. Paths: "" (status), "/totp/start",
+// "/totp/confirm" {setup, code}, "/totp/remove" {code}. Errors carry the
+// bridge's code ("reauth": sign in again first; "no_workos").
+export async function securityApi(path = "", body = null) {
+  const { supabase } = await import("./supabaseClient");
+  const { data } = await supabase.auth.getSession();
+  const token = data?.session?.access_token;
+  if (!token) throw new Error("Sign in again to change your security settings.");
+  let r;
+  try {
+    r = await fetch(`${BRIDGE}/security${path}`, {
+      method: body ? "POST" : "GET",
+      headers: { Authorization: `Bearer ${token}`, ...(body ? { "Content-Type": "application/json" } : {}) },
+      ...(body ? { body: JSON.stringify(body) } : {}),
+      cache: "no-store",
+    });
+  } catch {
+    throw new Error("Security settings can't be reached right now. Check your connection and try again.");
+  }
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw Object.assign(new Error(j.error || "Security settings are unavailable right now. Try again in a minute."), { code: j.code || null });
+  return j;
+}

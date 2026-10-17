@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Security panel preview</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>body{margin:0;background:#fff;font-family:Inter,sans-serif}.bar{background:#0B0B0C;color:#fff;padding:12px 20px;font:600 13px Inter,sans-serif}.bar b{color:#FCBD00}main{max-width:720px;margin:0 auto;padding:10px 28px 60px}</style>
+</head>
+<body>
+<!-- Local review only (served by the Vite dev server; never deployed): the real
+     SecurityPanel with a simulated session and simulated bridge answers.
+     ?state=off | on | noworkos | reauth -->
+<div class="bar">Security panel preview · <b>simulated</b> session and bridge · state: <span id="st"></span></div>
+<main id="root"></main>
+<script type="module">
+import React from "react";
+import { createRoot } from "react-dom/client";
+import { supabase } from "/src/lib/supabaseClient.js";
+import { AuthProvider } from "/src/auth/AuthProvider.jsx";
+import { SecurityPanel } from "/src/auth/SecurityPanel.jsx";
+
+const state = new URLSearchParams(location.search).get("state") || "off";
+document.getElementById("st").textContent = state;
+let on = state === "on";
+supabase.auth.getSession = async () => ({ data: { session: { access_token: "preview.token.only" } }, error: null });
+const qr = "data:image/svg+xml;utf8," + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 21 21" shape-rendering="crispEdges"><rect width="21" height="21" fill="#fff"/>' +
+  Array.from({ length: 21 * 21 }, (_, i) => ((i * 7919) % 5 < 2 || (i % 21 < 7 && Math.floor(i / 21) < 7)) ? `<rect x="${i % 21}" y="${Math.floor(i / 21)}" width="1" height="1"/>` : "").join("") + "</svg>");
+const real = window.fetch.bind(window);
+window.fetch = async (url, init = {}) => {
+  const u = String(url);
+  if (!u.includes("/workos-auth/security")) return real(url, init);
+  await new Promise((r) => setTimeout(r, 300));
+  const body = init.body ? JSON.parse(init.body) : {};
+  const res = (status, j) => new Response(JSON.stringify(j), { status, headers: { "Content-Type": "application/json" } });
+  if (u.endsWith("/security")) {
+    if (state === "noworkos") return res(200, { workos: false, totp: { on: false }, method: "MagicAuth", strong: false, recent: true });
+    return res(200, { workos: true, totp: { on, since: on ? "2026-10-17T09:00:00Z" : null }, method: on ? "Password" : "GoogleOAuth", strong: false, recent: state !== "reauth" });
+  }
+  if (state === "reauth") return res(403, { error: "For your safety, sign in again before changing two-step verification.", code: "reauth" });
+  if (u.endsWith("/totp/start")) return res(200, { setup: "sealed", secret: "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP", uri: "otpauth://totp/Attacked.ai:you%40example.com?secret=JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP&issuer=Attacked.ai", qr });
+  if (u.endsWith("/totp/confirm")) { if (body.code === "123456") { on = true; return res(200, { totp: { on: true } }); } return res(400, { error: "That code didn't match. Use the newest code in the app, and check your phone's clock is set automatically." }); }
+  if (u.endsWith("/totp/remove")) { if (body.code === "123456") { on = false; return res(200, { totp: { on: false } }); } return res(400, { error: "That code didn't match. Use the newest code in the app." }); }
+  return res(404, { error: "not found" });
+};
+createRoot(document.getElementById("root")).render(React.createElement(AuthProvider, null, React.createElement(SecurityPanel)));
+</script>
+</body>
+</html>
