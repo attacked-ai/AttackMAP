@@ -649,6 +649,10 @@ export function AttackHub() {
   // authored, newer one. Either source failing leaves the other working.
   const [reportByIncident, setReportByIncident] = useState({});
   const [cmsReports, setCmsReports] = useState([]);   // published rows, for the reports section
+  // Flagship baked reports pinned to the top of the Reports section
+  // (manifest.json "featured"), so a briefing is not lost deep in the feed
+  // once newer incidents push its incident card down.
+  const [featuredReports, setFeaturedReports] = useState([]);
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -658,6 +662,7 @@ export function AttackHub() {
         const m = r.ok ? await r.json() : null;
         if (Array.isArray(m)) baked = { refs: m, byIncident: {} };
         else if (m) baked = { refs: m.refs || Object.values(m.byIncident || {}), byIncident: m.byIncident || {} };
+        if (m && Array.isArray(m.featured) && !cancelled) setFeaturedReports(m.featured.filter((f) => f && f.ref && f.title));
       } catch { /* no manifest — the CMS alone still works */ }
       let rows = [];
       try { rows = await listPublishedReports({ limit: 1000 }); } catch { /* CMS unreachable — the baked files alone still work */ }
@@ -883,6 +888,32 @@ export function AttackHub() {
   // Standalone reports: analyst pieces that are not about one incident. The
   // hero is the report's own picture when it has one; NewsImage falls back to
   // a category image when it does not, so both shapes look deliberate.
+  // A pinned baked report → the article shape ReportFrame opens.
+  const featuredArticle = (f) => ({
+    id: f.incident ?? f.ref, _key: `feat-${f.ref}`, reportRef: f.ref,
+    headline: f.title, summary: f.subtitle || "", article_body: f.subtitle || "",
+    severity: f.severity, primary_category: f.category, primary_subcategory_name: null,
+    industry: f.industry || null, sector: f.industry || null, entity: null, country: null, location_name: null,
+    image_url: f.image || null, incident_day: f.day, event_date: f.day, sortDay: f.day,
+    confidence: null, status: null, reporter: null, data: null,
+  });
+  const FeaturedReportCard = (f) => {
+    const a = featuredArticle(f);
+    return (
+      <div key={`feat-${f.ref}`} className="opc" style={{ cursor: "pointer", padding: 0, overflow: "hidden", outline: `2px solid ${GOLD}`, outlineOffset: -2 }} onClick={() => openArticle(a)}>
+        <NewsImage a={a} />
+        <div style={{ padding: "16px 18px 18px" }}>
+          <div className="mrow" style={{ marginBottom: 8, gap: 8 }}>
+            <span style={{ background: GOLD, color: "#0F0F0F", fontSize: 9.5, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase", padding: "3px 7px" }}>{f.kicker || "Featured briefing"}</span>
+            <SevChip a={a} /><span className="by">{fmtShort(a.incident_day)}</span>
+          </div>
+          <h3 style={{ margin: "0 0 6px" }}>{f.title}</h3>
+          {f.subtitle && <p style={{ margin: 0 }}>{f.subtitle}</p>}
+          <div className="by" style={{ marginTop: 10 }}>{[f.industry, CAT_NAME[f.category] || f.category].filter(Boolean).join("  ·  ")}</div>
+        </div>
+      </div>
+    );
+  };
   const ReportCard = (r) => {
     const a = reportArticle(r);
     return (
@@ -1096,6 +1127,28 @@ export function AttackHub() {
                       );
                     })()}
 
+                    {featuredReports.slice(0, 1).map((f) => {
+                      const a = featuredArticle(f);
+                      return (
+                        <section key={`featband-${f.ref}`} className="sec" aria-label="Featured briefing">
+                          <div onClick={() => openArticle(a)} role="button" tabIndex={0}
+                            onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openArticle(a); } }}
+                            style={{ display: "flex", flexWrap: "wrap", alignItems: "stretch", cursor: "pointer", background: "#0F0F11", color: "#fff", border: `1px solid ${GOLD}`, overflow: "hidden" }}>
+                            <div style={{ flex: "1 1 320px", minHeight: 200, background: `#1a1a1d url("${f.image || ""}") center/cover no-repeat` }} />
+                            <div style={{ flex: "1.4 1 380px", padding: "26px 28px", display: "flex", flexDirection: "column", justifyContent: "center", gap: 10 }}>
+                              <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                                <span style={{ background: GOLD, color: "#0F0F0F", fontSize: 10, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase", padding: "4px 8px" }}>{f.kicker || "Featured briefing"}</span>
+                                <span style={{ fontSize: 11, color: "#A8A8A8", letterSpacing: "0.06em", textTransform: "uppercase" }}>{[f.industry, fmtShort(f.day)].filter(Boolean).join("  ·  ")}</span>
+                              </div>
+                              <h2 style={{ margin: 0, fontSize: 28, lineHeight: 1.15, letterSpacing: "-0.02em", color: "#fff" }}>{f.title}</h2>
+                              {f.subtitle && <p style={{ margin: 0, fontSize: 15, lineHeight: 1.55, color: "#C9C9CF", maxWidth: "62ch" }}>{f.subtitle}</p>}
+                              <span style={{ marginTop: 6, alignSelf: "flex-start", background: GOLD, color: "#0F0F0F", fontSize: 12, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", padding: "11px 18px" }}>Read the briefing →</span>
+                            </div>
+                          </div>
+                        </section>
+                      );
+                    })}
+
                     {top.length > 0 && (
                       <section className="sec"><SecHead>Top Stories</SecHead><div className="g4">{top.map(Story)}</div></section>
                     )}
@@ -1141,11 +1194,11 @@ export function AttackHub() {
                       );
                     })}
 
-                    {standaloneReports.length > 0 && (
+                    {(featuredReports.length > 0 || standaloneReports.length > 0) && (
                       <section className="reports sec" style={{ marginTop: 48, padding: "42px 0" }}>
                         <div className="wrap">
                           <div className="sh l"><span className="sq" style={{ background: GOLD }} /><h2>Reports</h2></div>
-                          <div className="an3">{standaloneReports.map(ReportCard)}</div>
+                          <div className="an3">{featuredReports.map(FeaturedReportCard)}{standaloneReports.slice(0, Math.max(0, 6 - featuredReports.length)).map(ReportCard)}</div>
                         </div>
                       </section>
                     )}
