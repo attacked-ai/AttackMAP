@@ -19,6 +19,10 @@ import React, { createContext, useContext, useEffect, useState, useCallback } fr
 import { supabase } from "../lib/supabaseClient";
 import { SUBSCRIBER_TIER, isSubscriber } from "../lib/taxonomy";
 import { sendCode, setSubscription } from "../lib/api";
+// VITE_AUTH_PROVIDER=workos: codes and social sign-in go through WorkOS
+// (lib/workos.js, supabase/functions/workos-auth); the Supabase session, the
+// profile row and the tiers stay exactly as they are.
+import { WORKOS, emailStart, emailVerify, startProvider, takeReturn, savePending, takePending } from "../lib/workos";
 
 const AuthContext = createContext({
   user: null,
@@ -61,6 +65,36 @@ async function fetchProfile(userId) {
   return data;
 }
 
+// Back from Google / Microsoft / GitHub / LinkedIn through WorkOS: turn the
+// one-time token into the Supabase session, then save the sign-up form if it
+// was filled before the trip, so the reader lands on their dashboard with
+// nothing more to answer. Once per page load: StrictMode runs effects twice in
+// dev, and the token (already taken off the address) works only once.
+let returnTrip = null;
+function finishReturnTrip() {
+  if (returnTrip) return returnTrip;
+  const ret = WORKOS ? takeReturn() : null;
+  returnTrip = !ret ? Promise.resolve() : (async () => {
+    const { data, error } = await supabase.auth.verifyOtp({ token_hash: ret.token_hash, type: ret.type });
+    if (error) { console.warn("[Auth] WorkOS sign-in could not be completed:", error.message); return; }
+    const u = data?.user || data?.session?.user;
+    const pending = takePending();
+    if (!u?.id || !pending) return;
+    const uid = u.id;
+    const { marketing_opt_in, ...fields } = pending;
+    const before = await fetchProfile(uid);
+    // Name and picture from the provider (user metadata), where the form and
+    // the profile have none.
+    const meta = u.user_metadata || {};
+    if (!fields.full_name && !before?.full_name && meta.full_name) fields.full_name = meta.full_name;
+    if (!before?.avatar_url && meta.avatar_url) fields.avatar_url = meta.avatar_url;
+    // onboarded_at NULL -> set sends the welcome email (trg_welcome_on_onboarded).
+    await supabase.from("profiles").update({ ...fields, ...(before?.onboarded_at ? {} : { onboarded_at: new Date().toISOString() }) }).eq("id", uid);
+    if (typeof marketing_opt_in === "boolean") await supabase.auth.updateUser({ data: { marketing_opt_in } });
+  })().catch((e) => console.warn("[Auth] WorkOS sign-in could not be completed:", e?.message || e));
+  return returnTrip;
+}
+
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [profile, setProfile] = useState(null);
@@ -71,6 +105,7 @@ export function AuthProvider({ children }) {
     let cancelled = false;
 
     (async () => {
+      await finishReturnTrip();   // a WorkOS provider trip, before anything reads the session
       const { data } = await supabase.auth.getSession();
       if (cancelled) return;
       const sessionUser = data?.session?.user || null;
@@ -82,15 +117,19 @@ export function AuthProvider({ children }) {
       if (!cancelled) setLoading(false);
     })();
 
-    const { data: sub } = supabase.auth.onAuthStateChange(async (_event, session) => {
+    // supabase-js holds its auth lock while this callback runs; awaiting another
+    // Supabase call inside it can deadlock. Hand the profile read to the next tick
+    // (and after a WorkOS trip's sign-up answers are saved, so the profile read
+    // here is never the half-made one).
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
       const sessionUser = session?.user || null;
       setUser(sessionUser);
-      if (sessionUser) {
+      if (!sessionUser) { setProfile(null); return; }
+      setTimeout(async () => {
+        await finishReturnTrip();
         const p = await fetchProfile(sessionUser.id);
-        setProfile(p);
-      } else {
-        setProfile(null);
-      }
+        if (!cancelled) setProfile(p);
+      }, 0);
     });
 
     return () => {
@@ -111,6 +150,9 @@ export function AuthProvider({ children }) {
   // production build with no dashboard). The origin must be allow-listed under
   // Authentication → URL configuration → Redirect URLs.
   const signIn = useCallback(async (email, meta = null) => {
+    // WorkOS: it makes the code and workos-auth emails it (Attacked.ai template).
+    // The sign-up answers are saved onto the profile after the code (AuthModal).
+    if (WORKOS) { await emailStart(String(email || "").trim().toLowerCase()); return; }
     // The API sends the code itself (always a code, never a link, any
     // address) when VITE_API_URL is set and the API is reachable. A real
     // refusal from the API (bad address, mail failure) is surfaced; only an
@@ -135,7 +177,14 @@ export function AuthProvider({ children }) {
   // enabled" and the modal says so. Supabase redirects back with ?code=,
   // supabase-js exchanges it for a session on load, and onAuthStateChange
   // above picks it up like any other sign-in.
-  const signInWithProvider = useCallback(async (provider, redirectTo) => {
+  // WorkOS: a full-page trip through workos-auth to the provider and back;
+  // `pending` (the sign-up form, if filled) is saved once the reader returns.
+  const signInWithProvider = useCallback(async (provider, redirectTo, pending = null) => {
+    if (WORKOS) {
+      if (pending) savePending(pending);
+      startProvider(provider, redirectTo);
+      return;
+    }
     const { error } = await supabase.auth.signInWithOAuth({
       provider,
       options: { redirectTo: redirectTo || (typeof window !== "undefined" ? `${window.location.origin}/?dashboard` : undefined) },
@@ -195,6 +244,13 @@ export function AuthProvider({ children }) {
   const verifyCode = useCallback(async (email, token, type = "email") => {
     const em = String(email || "").trim().toLowerCase();
     const raw = String(token || "").replace(/\D/g, "");
+    // WorkOS checks the code; workos-auth answers with a one-time Supabase token.
+    if (WORKOS) {
+      const t = await emailVerify(em, raw);
+      const { data, error } = await supabase.auth.verifyOtp({ token_hash: t.token_hash, type: t.type });
+      if (error) throw error;
+      return data;
+    }
     const tokens = [raw, ...OTP_LENGTHS.filter((n) => raw.length < n).map((n) => raw.padStart(n, "0"))];
     const types = [type, type === "signup" ? "email" : "signup"];
     let firstError = null;
@@ -210,16 +266,22 @@ export function AuthProvider({ children }) {
 
   // Persist the signup form basics onto the profile row. identity.profiles has
   // an own-row UPDATE policy, so this writes only the caller's row. Best-effort
-  // — never blocks the sign-in.
+  // — never blocks the sign-in. Returns { profile } on success, { error }
+  // otherwise, for callers that need to know (WorkOS "One last step").
   const saveProfileBasics = useCallback(async (fields) => {
     try {
       const { data: u } = await supabase.auth.getUser();
       const uid = u?.user?.id;
-      if (!uid) return;
-      await supabase.from("profiles").update(fields).eq("id", uid);
+      if (!uid) return { error: "You're not signed in." };
+      const { error } = await supabase.from("profiles").update(fields).eq("id", uid);
+      if (error) { console.warn("[Auth] profile basics save failed:", error.message); return { error: "Could not save. Try again." }; }
       const fresh = await fetchProfile(uid);
       setProfile(fresh);
-    } catch (err) { console.warn("[Auth] profile basics save failed:", err?.message); }
+      return { profile: fresh };
+    } catch (err) {
+      console.warn("[Auth] profile basics save failed:", err?.message);
+      return { error: "Could not save. Try again." };
+    }
   }, []);
 
   // Upload a profile picture to the `avatars` storage bucket, then persist its
@@ -318,7 +380,7 @@ export function AuthProvider({ children }) {
   else if (user) tier = profile?.tier || "free";
 
   return (
-    <AuthContext.Provider value={{ user, tier, subscriber: isSubscriber(tier), loading, signIn, signInWithProvider, signUpWithPassword, signInWithPassword, verifyCode, saveProfileBasics, uploadAvatar, signOut, profile, setEmailSubscribed, setSubscribed, refreshProfile }}>
+    <AuthContext.Provider value={{ user, tier, subscriber: isSubscriber(tier), loading, workos: WORKOS, signIn, signInWithProvider, signUpWithPassword, signInWithPassword, verifyCode, saveProfileBasics, uploadAvatar, signOut, profile, setEmailSubscribed, setSubscribed, refreshProfile }}>
       {children}
     </AuthContext.Provider>
   );

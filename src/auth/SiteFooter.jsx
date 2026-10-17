@@ -195,7 +195,7 @@ export function SiteFooter() {
                   style={{
                     width: 40, height: 40, flex: "none", borderRadius: "50%",
                     border: `1px solid ${BRAND.white}`, color: BRAND.white, background: "transparent",
-                    display: "inline-flex", alignItems: "center", justifyContent: "center",
+                    display: "inline-flex", alignItems: "center", justifyContent: "center", textDecoration: "none",
                     transition: "color 160ms ease, background 160ms ease",
                   }}
                   onMouseEnter={e => { e.currentTarget.style.background = BRAND.white; e.currentTarget.style.color = BRAND.obsidian; }}

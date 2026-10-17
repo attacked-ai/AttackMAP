@@ -146,7 +146,7 @@ export function AdminDashboard() {
           </span>
         </div>
         <div style={{ display: "flex", gap: 14, alignItems: "center" }}>
-          <a href="/" className="adm-head-back" style={{
+          <a href="/?map" className="adm-head-back" style={{
             fontFamily: "Inter, sans-serif", fontSize: 11, fontWeight: 600,
             color: BRAND.textSecondary, letterSpacing: "0.10em",
             textTransform: "uppercase", textDecoration: "none",

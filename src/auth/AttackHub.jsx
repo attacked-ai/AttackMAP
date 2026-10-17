@@ -799,7 +799,8 @@ export function AttackHub() {
   useEffect(() => { setPage(0); }, [catFilter, indFilter, dayFilter, dateFrom, dateTo]);
 
   function goToPage(p) { setPage(Math.max(0, Math.min(p, pageCount - 1))); try { window.scrollTo({ top: 0, behavior: "smooth" }); } catch { window.scrollTo(0, 0); } }
-  function openMap() { if (user) window.location.href = "/"; else setAuthOpen(true); }
+  // "/?map": the bare "/" is the dashboard for a signed-in reader.
+  function openMap() { if (user) window.location.href = "/?map"; else setAuthOpen(true); }
   function openArticle(a) { setSelected(a); try { window.scrollTo({ top: 0, behavior: "instant" }); } catch { window.scrollTo(0, 0); } }
 
   // ── card/rail builders (close over openArticle) ──

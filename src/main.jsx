@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState } from "react";
 import ReactDOM from "react-dom/client";
 // Brand system first: fonts and tokens, then the shared navigation that every
 // page renders. Page-level stylesheets (dashboard, map) read the same tokens.
@@ -17,6 +17,9 @@ import { LegalPage } from "./auth/LegalPage.jsx";
 import { ProfilePage } from "./auth/ProfilePage.jsx";
 import { AdminDashboard } from "./admin/AdminDashboard.jsx";
 import { Dashboard } from "./dashboard/Dashboard.jsx";
+import { CompleteProfile } from "./auth/CompleteProfile.jsx";
+import { supabase } from "./lib/supabaseClient";
+import { WORKOS } from "./lib/workos";
 
 // ─────────────────────────────────────────────────────────────────────────
 // AppShell — decides what the visitor sees based on auth state.
@@ -179,7 +182,7 @@ function AppShell() {
           <div style={{ fontSize: 13, marginBottom: 20, maxWidth: 380 }}>
             This page is restricted to the internal team. Your current tier is <b>{tier || "free"}</b>.
           </div>
-          <a href="/" style={{
+          <a href="/?map" style={{
             padding: "10px 20px", background: "#FCBD00", color: "#1A1A1A",
             textDecoration: "none", borderRadius: 4, fontSize: 12,
             fontWeight: 700, letterSpacing: "0.10em", textTransform: "uppercase",
@@ -229,10 +232,76 @@ function AppShell() {
   return <LandingPage />;
 }
 
+// WorkOS sign-in only: a reader who came in through Google / Microsoft /
+// GitHub / LinkedIn straight from "Sign in" never saw the sign-up form, so the
+// same questions are asked once (CompleteProfile.jsx) until the profile has an
+// industry. Legal pages and unsubscribe links stay readable without it.
+function ProfileStep() {
+  const { user, profile, loading, saveProfileBasics, signOut } = useAuth();
+  const show = WORKOS && !loading && !!user && !!profile && !profile.industry && (() => {
+    try { const q = new URLSearchParams(window.location.search); return !q.has("legal") && !q.has("unsubscribe"); }
+    catch { return true; }
+  })();
+  if (!show) return null;
+  const meta = user.user_metadata || {};
+  async function save(fields, consent) {
+    try { await supabase.auth.updateUser({ data: { marketing_opt_in: !!consent } }); }
+    catch (e) { console.warn("[Profile] opt-in not saved:", e?.message || e); }
+    // onboarded_at NULL -> set sends the welcome email (trg_welcome_on_onboarded).
+    const r = await saveProfileBasics({ ...fields, ...(profile.onboarded_at ? {} : { onboarded_at: new Date().toISOString() }) });
+    if (r?.error) return { error: r.error };
+    if (!r?.profile?.industry) return { error: "Could not save. Try again." };
+    return { ok: true };
+  }
+  return (
+    <CompleteProfile email={user.email} profile={profile}
+      nameHint={{ first_name: meta.first_name, last_name: meta.last_name, full_name: meta.full_name || meta.name }}
+      onSave={save} onSignOut={async () => { await signOut(); window.location.href = "/"; }} />
+  );
+}
+
+// ?signin_error=<reason>: a WorkOS sign-in trip that could not finish lands on
+// /?home with it. Say why, once.
+const SIGNIN_ERRORS = {
+  cancelled: "Sign-in was cancelled. You can try again any time.",
+  expired: "That sign-in took too long to finish. Please start again.",
+  unverified: "We couldn't confirm that email address. Please try another sign-in option.",
+  suspended: "This account is suspended. Email hello@attacked.ai if you think that's a mistake.",
+  unavailable: "Sign-in isn't available right now. Please try again in a few minutes.",
+};
+function SigninNotice() {
+  const [reason, setReason] = useState(() => {
+    try { return new URLSearchParams(window.location.search).get("signin_error"); } catch { return null; }
+  });
+  if (!reason) return null;
+  function dismiss() {
+    setReason(null);
+    try {
+      const search = window.location.search.replace(/([?&])signin_error=[^&]*&?/, "$1").replace(/[?&]$/, "");
+      window.history.replaceState(null, "", window.location.pathname + search + window.location.hash);
+    } catch { /* noop */ }
+  }
+  return (
+    <div role="alert" style={{
+      position: "fixed", left: "50%", bottom: 24, transform: "translateX(-50%)", zIndex: 10000,
+      width: "min(560px, calc(100% - 32px))", boxSizing: "border-box", display: "flex", alignItems: "center", gap: 8,
+      padding: "6px 4px 6px 16px", background: "#0E1116", color: "#FFFFFF", borderLeft: "3px solid #FCBD00",
+      borderRadius: 4, boxShadow: "0 12px 40px rgba(0,0,0,.35)", fontFamily: "Inter, sans-serif", fontSize: 13.5, lineHeight: 1.5,
+    }}>
+      <span style={{ flex: 1, minWidth: 0, padding: "6px 0" }}>{SIGNIN_ERRORS[reason] || "Sign-in didn't finish. Please try again."}</span>
+      <button type="button" onClick={dismiss} aria-label="Dismiss" style={{
+        flex: "none", width: 44, height: 44, background: "none", border: 0, color: "#A6A8AD", fontSize: 18, cursor: "pointer",
+      }}>×</button>
+    </div>
+  );
+}
+
 ReactDOM.createRoot(document.getElementById("root")).render(
   <React.StrictMode>
     <AuthProvider>
       <AppShell />
+      <ProfileStep />
+      <SigninNotice />
     </AuthProvider>
   </React.StrictMode>
 );

@@ -17,10 +17,11 @@
 // NOTE: the "I'm not a robot" checkbox is a client-side gate matching the
 // reference; real bot protection needs Supabase Auth captcha config.
 // ─────────────────────────────────────────────────────────────────────────
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useAuth } from "./AuthProvider";
 import { supabase } from "../lib/supabaseClient";
 import { SECTORS, ROLES } from "../lib/taxonomy";
+import { WORKOS, startHosted } from "../lib/workos";
 
 // Light / paper palette — white + ink + strong gold brand accent.
 const C = {
@@ -48,6 +49,40 @@ const C = {
 // "can't type in the password box" bug).
 const Field = ({ children }) => <div style={{ marginBottom: 10 }}>{children}</div>;
 
+// WorkOS: shown for the moment before the browser leaves for the WorkOS page,
+// or with the reason it could not. Always closable (button, backdrop, Escape):
+// a cancelled navigation must not leave the page covered.
+function HostedNotice({ error, onClose }) {
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  return (
+    <div className="am-overlay" onClick={onClose} style={{
+      position: "fixed", inset: 0, zIndex: 9999, background: "rgba(15,15,15,0.55)",
+      backdropFilter: "blur(4px)", display: "flex", alignItems: "center", justifyContent: "center", padding: "18px",
+    }}>
+      <div role={error ? "alertdialog" : "status"} aria-live="polite" onClick={(e) => e.stopPropagation()} style={{
+        width: "min(420px, 100%)", background: C.paper, border: `1px solid ${C.line}`, borderRadius: 10,
+        padding: "22px 24px", boxShadow: "0 24px 70px rgba(16,16,16,0.28)", fontFamily: "Inter, sans-serif", textAlign: "center",
+      }}>
+        <div style={{ fontSize: 10, color: C.goldDeep, letterSpacing: "0.14em", textTransform: "uppercase", fontWeight: 700 }}>
+          Attacked.ai™ · Secure sign-in
+        </div>
+        <p style={{ margin: "12px 0 0", fontSize: 14, lineHeight: 1.55, color: error ? C.err : C.ink2 }}>
+          {error || "Opening secure sign-in…"}
+        </p>
+        <button type="button" onClick={onClose} style={{
+          marginTop: 16, padding: "10px 18px", border: "none", borderRadius: 4, cursor: "pointer",
+          background: error ? C.gold : "transparent", color: error ? "#1A1A1A" : C.ink3,
+          fontFamily: "Inter, sans-serif", fontSize: 13, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase",
+        }}>{error ? "Close" : "Cancel"}</button>
+      </div>
+    </div>
+  );
+}
+
 // Supabase provider id, label, brand mark. Which of these are SHOWN comes from
 // VITE_AUTH_PROVIDERS (comma-separated ids, e.g. "google,linkedin_oidc"); unset
 // shows all four. A provider that is not switched on in Supabase
@@ -59,13 +94,19 @@ const ALL_PROVIDERS = [
   ["github", "GitHub", '<svg viewBox="0 0 24 24" width="18" height="18"><path fill="#181717" d="M12 .5C5.7.5.5 5.7.5 12c0 5.1 3.3 9.4 7.9 10.9.6.1.8-.2.8-.6v-2.1c-3.2.7-3.9-1.4-3.9-1.4-.5-1.3-1.3-1.7-1.3-1.7-1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1 1.8 2.7 1.3 3.4 1 .1-.8.4-1.3.7-1.6-2.6-.3-5.3-1.3-5.3-5.7 0-1.3.4-2.3 1.2-3.1-.1-.3-.5-1.5.1-3.1 0 0 1-.3 3.2 1.2a11 11 0 0 1 5.8 0c2.2-1.5 3.2-1.2 3.2-1.2.6 1.6.2 2.8.1 3.1.8.8 1.2 1.8 1.2 3.1 0 4.4-2.7 5.4-5.3 5.7.4.4.8 1.1.8 2.2v3.2c0 .3.2.7.8.6 4.6-1.5 7.9-5.8 7.9-10.9C23.5 5.7 18.3.5 12 .5z"/></svg>'],
   ["azure", "Microsoft", '<svg viewBox="0 0 24 24" width="18" height="18"><rect x="2" y="2" width="9" height="9" fill="#F25022"/><rect x="13" y="2" width="9" height="9" fill="#7FBA00"/><rect x="2" y="13" width="9" height="9" fill="#00A4EF"/><rect x="13" y="13" width="9" height="9" fill="#FFB900"/></svg>'],
 ];
-const ENABLED = String((typeof import.meta !== "undefined" && import.meta.env && import.meta.env.VITE_AUTH_PROVIDERS) || "").split(",").map((s) => s.trim()).filter(Boolean);
+// With WorkOS (VITE_AUTH_PROVIDER=workos) the list is VITE_WORKOS_PROVIDERS
+// instead (same ids; default all four), since those are switched on in WorkOS,
+// not in Supabase.
+const ENABLED = String((typeof import.meta !== "undefined" && import.meta.env &&
+  (WORKOS ? (import.meta.env.VITE_WORKOS_PROVIDERS || "google,azure,linkedin_oidc,github") : import.meta.env.VITE_AUTH_PROVIDERS)) || "")
+  .split(",").map((s) => s.trim()).filter(Boolean);
 const PROVIDERS = ENABLED.length ? ALL_PROVIDERS.filter(([id]) => ENABLED.includes(id)) : ALL_PROVIDERS;
 
 // intent="subscribe": the reader pressed Subscribe while signed out. Once the
 // session exists we send them back to the subscription page with
 // ?activate=subscriber, which finishes the switch for them.
-export function AuthModal({ open, onClose, intent = null }) {
+// screen: which WorkOS page opens first, "sign-up" (default) or "sign-in".
+export function AuthModal({ open, onClose, intent = null, screen = "sign-up" }) {
   const { signInWithPassword, signIn, signInWithProvider, verifyCode, saveProfileBasics } = useAuth();
 
   const [view, setView] = useState("signup"); // "signup" | "signin" | "code"
@@ -88,8 +129,32 @@ export function AuthModal({ open, onClose, intent = null }) {
   const [robot, setRobot] = useState(false);
   const [code, setCode] = useState("");
   const [sentAt, setSentAt] = useState(null);   // when the current code was sent — the newest email is the only valid one
+  // WorkOS: the WorkOS-hosted page (AuthKit, branded in the WorkOS dashboard)
+  // replaces this window: opening it sends the reader there. What WorkOS
+  // can't ask (job title, company, industry) comes right after the first
+  // sign-in, on "One last step" (main.jsx ProfileStep).
+  const [hostedError, setHostedError] = useState(null);
+  // No box on the way out (owner, 2026-10-10): "Opening secure sign-in…"
+  // appears only if leaving takes more than 3 s; errors always show.
+  const [slow, setSlow] = useState(false);
+  useEffect(() => {
+    if (!WORKOS || !open) return;
+    const ctl = new AbortController();   // closing the window stops the trip
+    setHostedError(null);
+    setSlow(false);
+    const t = setTimeout(() => setSlow(true), 3000);
+    const back = `${window.location.origin}/${intent === "subscribe" ? "?subscribe&activate=subscriber" : "?dashboard"}`;
+    startHosted(screen, back, ctl.signal).catch((e) => { if (!ctl.signal.aborted) setHostedError(e?.message || "Sign-in is unavailable right now."); });
+    // Back from the WorkOS page: the browser may restore this page as it was
+    // left, "Opening secure sign-in…" and all. Close the window instead.
+    const onShow = (e) => { if (e.persisted) onClose(); };
+    window.addEventListener("pageshow", onShow);
+    return () => { ctl.abort(); clearTimeout(t); window.removeEventListener("pageshow", onShow); };
+  }, [open]);
 
   if (!open) return null;
+  if (WORKOS) return hostedError || slow ? <HostedNotice error={hostedError} onClose={onClose} /> : null;
+  const providers = PROVIDERS;
 
   const cleanEmail = email.trim().toLowerCase();
   // Accept whatever length the Supabase email-OTP is configured to (6–10).
@@ -168,6 +233,16 @@ export function AuthModal({ open, onClose, intent = null }) {
       // trg_welcome_on_onboarded sends the personalised welcome email when it
       // goes NULL → set. Without this stamp no welcome mail is ever sent.
       if (from === "signup") await saveProfileBasics({ ...profileFields(), onboarded_at: new Date().toISOString() });
+      // WorkOS: the code request carried no form, so keep the answers (and the
+      // email opt-in) on the account the way the Supabase code flow did.
+      if (WORKOS && from === "signup") {
+        try {
+          await supabase.auth.updateUser({ data: {
+            first_name: firstName.trim(), last_name: lastName.trim(), full_name: `${firstName.trim()} ${lastName.trim()}`.trim(),
+            job_title: jobTitle, company: company.trim(), industry, marketing_opt_in: consent,
+          } });
+        } catch (e) { console.warn("[Auth] sign-up details not kept on the account:", e?.message || e); }
+      }
       close(true); // session set; app re-renders signed in and lands on the dashboard
     } catch (err) {
       const m = err?.message || "";
@@ -180,10 +255,24 @@ export function AuthModal({ open, onClose, intent = null }) {
   // Social sign-in. Comes back to the dashboard, or to the subscription page
   // when the reader pressed Subscribe first.
   async function social(provider, label) {
-    setError(null); setBusy(true);
+    setError(null);
+    // WorkOS sign-up: the form's questions are answered here, on this page, and
+    // kept for the trip, so the reader comes back to the dashboard with nothing
+    // more to answer (no second page). The name comes from the provider if left
+    // blank. "Sign in" goes straight to the provider.
+    const signup = WORKOS && view === "signup";
+    if (signup && !(jobTitle && company.trim() && industry)) {
+      setError(`Choose your job title, company and industry first, then continue with ${label}.`);
+      return;
+    }
+    setBusy(true);
     try {
       const back = `${window.location.origin}/${intent === "subscribe" ? "?subscribe&activate=subscriber" : "?dashboard"}`;
-      await signInWithProvider(provider, back);
+      // Only what was typed: a blank name must not wipe the provider's one.
+      const answers = signup
+        ? Object.fromEntries(Object.entries({ ...profileFields(), marketing_opt_in: consent }).filter(([, v]) => v !== null && v !== ""))
+        : null;
+      await signInWithProvider(provider, back, answers);
       // the browser is now leaving for the provider; nothing more to do here
     } catch (err) {
       const m = err?.message || "";
@@ -217,17 +306,22 @@ export function AuthModal({ open, onClose, intent = null }) {
 
   // "Continue with …" — under the email form on both screens: an "Or" rule,
   // then the enabled providers.
-  const Social = () => PROVIDERS.length === 0 ? null : (
+  const Social = () => providers.length === 0 ? null : (
     <div style={{ marginTop: 14 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 12, margin: "0 0 10px", color: C.ink3, fontSize: 11.5, fontFamily: "Inter, sans-serif" }}>
         <span style={{ flex: 1, height: 1, background: C.line }} />Or continue with<span style={{ flex: 1, height: 1, background: C.line }} />
       </div>
+      {WORKOS && view === "signup" && (
+        <p className="am-fine" style={{ margin: "-2px 0 10px", fontSize: 11, color: C.ink3, fontFamily: "Inter, sans-serif", lineHeight: 1.45, textAlign: "center" }}>
+          Pick your job title, company and industry above first. Your name and email come from the account you choose.
+        </p>
+      )}
       {/* Two columns only when each can hold "Continue with Microsoft" (~185px):
           the 500px card keeps its pair, a phone gets one full-width column
           (the text used to run over the next button). auto-fill, not auto-fit,
           keeps a lone Google button at half width on desktop. */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(min(192px, 100%), 1fr))", gap: 8 }}>
-        {PROVIDERS.map(([id, label, icon]) => (
+        {providers.map(([id, label, icon]) => (
           <button key={id} type="button" disabled={busy} onClick={() => social(id, label)} style={{
             display: "flex", alignItems: "center", justifyContent: "center", gap: 8, width: "100%", minWidth: 0,
             padding: "9px 8px", background: C.paper, color: C.ink, border: `1px solid ${C.line2}`, borderRadius: 4,
@@ -242,7 +336,7 @@ export function AuthModal({ open, onClose, intent = null }) {
   // swipes no longer scroll the page underneath. .am-overlay also locks the
   // page's own scroll on touch screens while the modal is open (responsive.css).
   return (
-    <div className="am-overlay" onClick={close} style={{
+    <div className="am-overlay" onClick={() => close()} style={{
       position: "fixed", inset: 0, zIndex: 9999, background: "rgba(15,15,15,0.55)",
       backdropFilter: "blur(4px)", display: "flex", alignItems: "flex-start",
       justifyContent: "center", padding: "3vh 18px", overflowY: "auto", overscrollBehavior: "contain",
@@ -258,7 +352,7 @@ export function AuthModal({ open, onClose, intent = null }) {
           </div>
           {/* 44x44 hit box. The negative margins give it the old 20x29 footprint
               (padding 4 around the glyph), so the × and the row stay put. */}
-          <button onClick={close} aria-label="Close" style={{ background: "none", border: "none", color: C.ink3, fontSize: 18, cursor: "pointer", padding: 0, width: 44, height: 44, margin: "-7.5px -12px -7.5px 0", display: "inline-flex", alignItems: "center", justifyContent: "center", flex: "none" }}>×</button>
+          <button onClick={() => close()} aria-label="Close" style={{ background: "none", border: "none", color: C.ink3, fontSize: 18, cursor: "pointer", padding: 0, width: 44, height: 44, margin: "-7.5px -12px -7.5px 0", display: "inline-flex", alignItems: "center", justifyContent: "center", flex: "none" }}>×</button>
         </div>
 
         {/* ───────── SIGN UP ───────── */}
@@ -363,12 +457,13 @@ export function AuthModal({ open, onClose, intent = null }) {
               {error && <div style={{ marginBottom: 12, fontSize: 12, color: C.err }}>{error}</div>}
               <button type="submit" disabled={busy} style={goldBtn(busy)}>{busy ? (usePw ? "Signing in…" : "Sending your code…") : (usePw ? "Sign in" : "Email me a code →")}</button>
             </form>
-            <div style={{ marginTop: 16, paddingTop: 14, borderTop: `1px solid ${C.line}`, textAlign: "center" }}>
+            {/* Passwords are off with WorkOS: email code or a provider only. */}
+            {!WORKOS && <div style={{ marginTop: 16, paddingTop: 14, borderTop: `1px solid ${C.line}`, textAlign: "center" }}>
               <button type="button" onClick={() => { setUsePw(v => !v); setError(null); }} style={{ background: "none", border: "none", cursor: "pointer", fontFamily: "Inter, sans-serif", fontSize: 12.5, color: C.ink3, padding: "8px 6px", margin: "-7px 0" }}>
                 {usePw ? <>Prefer a code? <span style={{ color: C.goldDeep, textDecoration: "underline", fontWeight: 600 }}>Email me a code instead</span></>
                        : <>Set a password earlier? <span style={{ color: C.goldDeep, textDecoration: "underline", fontWeight: 600 }}>Sign in with it</span></>}
               </button>
-            </div>
+            </div>}
             <Social />
           </>
         )}
@@ -378,11 +473,12 @@ export function AuthModal({ open, onClose, intent = null }) {
           <>
             <h2 style={{ fontFamily: "Inter, sans-serif", fontWeight: 800, fontSize: 22, color: C.ink, lineHeight: 1.2, marginTop: 8, letterSpacing: "-0.015em" }}>Enter your code.</h2>
             <p style={{ marginTop: 12, marginBottom: 20, fontSize: 13.5, color: C.ink3, lineHeight: 1.55 }}>
-              We emailed your code to <b style={{ color: C.ink, overflowWrap: "anywhere" }}>{cleanEmail}</b>{sentAt ? <> at <b style={{ color: C.ink }}>{sentAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</b></> : null}. Use the newest email — each new code cancels the one before — and enter it within an hour.
+              We emailed your code to <b style={{ color: C.ink, overflowWrap: "anywhere" }}>{cleanEmail}</b>{sentAt ? <> at <b style={{ color: C.ink }}>{sentAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</b></> : null}. Use the newest email — each new code cancels the one before — and enter it within {WORKOS ? "10 minutes" : "an hour"}.
               {/* Until the Magic Link template in Supabase carries {{ .Token }}, a
                   reader whose address already has an account receives a link
-                  instead of a code. Say so, and make the link useful. */}
-              <span style={{ display: "block", marginTop: 8, fontSize: 12, color: C.ink4 }}>Got a sign-in link instead of a code? That means this address already has an account — the link signs you in too and opens your dashboard.</span>
+                  instead of a code. Say so, and make the link useful. (WorkOS
+                  always sends a code, from our own template.) */}
+              {!WORKOS && <span style={{ display: "block", marginTop: 8, fontSize: 12, color: C.ink4 }}>Got a sign-in link instead of a code? That means this address already has an account — the link signs you in too and opens your dashboard.</span>}
             </p>
             <form onSubmit={submitCode}>
               <label style={label}>Verification code</label>

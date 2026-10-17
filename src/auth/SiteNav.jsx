@@ -26,6 +26,7 @@ export function SiteNav({ active }) {
   const { user, tier, profile, signOut } = useAuth();
   const [authOpen, setAuthOpen] = useState(false);
   const [authIntent, setAuthIntent] = useState(null);
+  const [authScreen, setAuthScreen] = useState("sign-up"); // WorkOS page: "Sign in" opens sign-in
   const [menuOpen, setMenuOpen] = useState(false); // account dropdown (signed-in)
   const [navOpen, setNavOpen] = useState(false);   // mobile hamburger panel
 
@@ -33,7 +34,7 @@ export function SiteNav({ active }) {
   // keeps them on the landing page); anonymous visitors hit the sign-in wall.
   function enterMap() {
     if (user) window.location.href = "/?map";
-    else setAuthOpen(true);
+    else { setAuthScreen("sign-up"); setAuthOpen(true); }
   }
 
   // Hidden admin shortcut — three clicks on the wordmark inside 600ms opens
@@ -57,7 +58,9 @@ export function SiteNav({ active }) {
       {/* `acct-open` lifts the bar while the account menu is open, so the menu
           clears the Attack Map's floating panels (see site-nav.css). */}
       <header role="banner" className={`site-nav${menuOpen ? " acct-open" : ""}`}>
-        <a href="/" aria-label="Attacked.ai home" className="site-brand" onClick={brandClick}>
+        {/* ?home, not "/": for a signed-in reader "/" opens the dashboard,
+            and the logo is the way back to the landing page. */}
+        <a href="/?home" aria-label="Attacked.ai home" className="site-brand" onClick={brandClick}>
           <img src="/attacked-ai-logo.svg" alt="" className="shield" />
           <span className="wordmark">Attacked<span className="ai">.ai</span><sup>™</sup></span>
         </a>
@@ -127,14 +130,14 @@ export function SiteNav({ active }) {
             </>
           ) : (
             <>
-              <button type="button" className="nav-ghost" onClick={() => { setAuthIntent(null); setAuthOpen(true); }}>Sign in</button>
+              <button type="button" className="nav-ghost" onClick={() => { setAuthIntent(null); setAuthScreen("sign-in"); setAuthOpen(true); }}>Sign in</button>
               <a className="nav-gold" href="/?subscribe">Subscribe</a>
             </>
           )}
         </nav>
       </header>
 
-      <AuthModal open={authOpen} intent={authIntent} onClose={() => setAuthOpen(false)} />
+      <AuthModal open={authOpen} intent={authIntent} screen={authScreen} onClose={() => setAuthOpen(false)} />
     </>
   );
 }
