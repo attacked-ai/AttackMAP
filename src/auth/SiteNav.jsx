@@ -18,18 +18,37 @@
 // across the whole product is now a stylesheet change, not a JSX change — and
 // the mobile panel comes from the same place as the desktop bar.
 // ─────────────────────────────────────────────────────────────────────────
-import React, { useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { useAuth } from "./AuthProvider";
 import { WORKOS } from "../lib/workos";
 import { AuthModal } from "./AuthModal";
 
+let startedSignin = false;   // one trip per page load, however many navs mount
+
 export function SiteNav({ active }) {
-  const { user, tier, profile, signOut } = useAuth();
+  const { user, tier, profile, signOut, loading } = useAuth();
   const [authOpen, setAuthOpen] = useState(false);
   const [authIntent, setAuthIntent] = useState(null);
   const [authScreen, setAuthScreen] = useState("sign-up"); // WorkOS page: "Sign in" opens sign-in
   const [menuOpen, setMenuOpen] = useState(false); // account dropdown (signed-in)
   const [navOpen, setNavOpen] = useState(false);   // mobile hamburger panel
+  // ?signin: WorkOS sends people here when a sign-in has to start over — it is
+  // the "sign-in endpoint" in the WorkOS settings (e.g. "Back to sign-in" after
+  // a password-reset email). Once the session is known, a signed-out visitor
+  // goes straight to the WorkOS sign-in page; the parameter is then dropped.
+  useEffect(() => {
+    if (loading || startedSignin) return;
+    let want = false;
+    try { want = new URLSearchParams(window.location.search).has("signin"); } catch { /* noop */ }
+    if (!want) return;
+    startedSignin = true;
+    try {
+      const u = new URL(window.location.href);
+      u.searchParams.delete("signin");
+      window.history.replaceState(null, "", u.pathname + u.search + u.hash);
+    } catch { /* noop */ }
+    if (!user) { setAuthIntent(null); setAuthScreen("sign-in"); setAuthOpen(true); }
+  }, [loading, user]);
 
   // "Attack Map": signed-in users open the live map at ?map (the bare "/"
   // keeps them on the landing page); anonymous visitors hit the sign-in wall.

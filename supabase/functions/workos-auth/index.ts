@@ -548,7 +548,7 @@ async function providerStart(url: URL): Promise<Response> {
   try { const r = new URL(redirect); r.hash = ""; if (allowed(r.origin)) { site = r.origin; target = r.toString(); } } catch { /* default */ }
   if (!PROVIDERS.has(provider) || !(await providerReady(provider))) return back(site, "unavailable");
   const state = random();
-  const payload = b64url(enc.encode(JSON.stringify({ s: state, t: target, e: Date.now() + 10 * 60_000 })));
+  const payload = b64url(enc.encode(JSON.stringify({ s: state, t: target, e: Date.now() + 30 * 60_000 })));
   const q = new URLSearchParams({ client_id: CLIENT_ID, redirect_uri: CALLBACK, response_type: "code", provider, state });
   const hint = url.searchParams.get("login_hint");
   if (hint && EMAIL.test(hint)) q.set("login_hint", hint);
@@ -558,7 +558,7 @@ async function providerStart(url: URL): Promise<Response> {
     status: 302,
     headers: {
       Location: `${WORKOS}/user_management/authorize?${q}`,
-      "Set-Cookie": `${COOKIE}=${payload}.${await hmac(payload)}; Path=${COOKIE_PATH}; Max-Age=600; HttpOnly; Secure; SameSite=Lax`,
+      "Set-Cookie": `${COOKIE}=${payload}.${await hmac(payload)}; Path=${COOKIE_PATH}; Max-Age=1800; HttpOnly; Secure; SameSite=Lax`,
       "Cache-Control": "no-store",
     },
   });
