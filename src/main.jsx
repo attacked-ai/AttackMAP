@@ -18,6 +18,7 @@ import { ProfilePage } from "./auth/ProfilePage.jsx";
 import { AdminDashboard } from "./admin/AdminDashboard.jsx";
 import { Dashboard } from "./dashboard/Dashboard.jsx";
 import { CompleteProfile } from "./auth/CompleteProfile.jsx";
+import { SecurityNudge } from "./auth/SecurityNudge.jsx";
 import { supabase } from "./lib/supabaseClient";
 import { WORKOS } from "./lib/workos";
 
@@ -302,6 +303,7 @@ ReactDOM.createRoot(document.getElementById("root")).render(
       <AppShell />
       <ProfileStep />
       <SigninNotice />
+      <SecurityNudge />
     </AuthProvider>
   </React.StrictMode>
 );

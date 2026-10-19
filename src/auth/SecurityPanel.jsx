@@ -106,7 +106,8 @@ export function SecurityPanel() {
 
       {/* Two-step verification */}
       <div style={card}>
-        <h3 ref={titleRef} tabIndex={-1} style={h3}>Two-step verification {status && status.workos !== false && <span style={pill(on)}>{on ? "On" : "Off"}</span>}</h3>
+        <h3 ref={titleRef} tabIndex={-1} style={h3}>Two-step verification {status && status.workos !== false && <span style={pill(on)}>{on ? "On" : "Off"}</span>}
+          {status && status.workos !== false && !on && status.method !== "Passkey" && <span style={{ ...pill(false), background: C.warnBg, color: C.goldDeep }}>Recommended</span>}</h3>
         {!status && !loadErr && <p style={p}>Checking…</p>}
 
         {status && status.workos === false && (<>
@@ -116,7 +117,7 @@ export function SecurityPanel() {
 
         {status && status.workos !== false && !on && step === "idle" && (<>
           <p style={p}>Adds a second step on the Attacked.ai sign-in page: a 6-digit code from an authenticator app on your phone, such as Google Authenticator, Microsoft Authenticator or 1Password. A stolen password alone is then not enough to get in.</p>
-          <p style={{ ...p, fontSize: 12.5, color: C.ink3 }}>Keep the app on your phone. If you lose it, contact the Attacked.ai team and we will reset two-step verification after checking it's you.</p>
+          <p style={{ ...p, fontSize: 12.5, color: C.ink3 }}>It's optional, and you can turn it off here at any time. Keep the app on your phone. If you lose it, contact the Attacked.ai team and we will reset two-step verification after checking it's you.</p>
           <button type="button" style={btn(true, !!busy)} disabled={!!busy} onClick={start}>{busy === "start" ? "Starting…" : "Turn on two-step verification"}</button>
         </>)}
 
