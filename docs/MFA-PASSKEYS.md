@@ -24,14 +24,16 @@
 
 ## 1. Switch it on (two steps)
 
-**Option A (easiest):** re-enable the Supabase connector tools for this project in Claude's connector settings. Then tell Claude "deploy the two-step bridge", and it applies the migration, deploys the bridge and tests it.
+**Option A (easiest):** re-enable the Supabase connector tools for this project in Claude's connector settings ("Sweeper DB"). Then tell Claude "deploy the two-step bridge", and it applies the migration, deploys the bridge **with verify_jwt = false** and tests it. (The deploy tool defaults to verify_jwt = true, which would make Supabase refuse every sign-in before the bridge runs.)
 
 **Option B (by hand, in the Supabase dashboard of project `ovenyjguhkgiceddzwna`):**
 1. **SQL Editor:** paste the whole of `supabase/migrations/20261017_mfa_attempts.sql` and click **Run**.
 2. **Edge Functions → `workos-auth`:**
    - Replace the code with `supabase/functions/workos-auth/index.ts` and click **Deploy**.
    - Keep **"Verify JWT" OFF**, as it is today.
-3. Check: `https://ovenyjguhkgiceddzwna.supabase.co/functions/v1/workos-auth/providers` still shows `"configured":true`.
+3. Check: `https://ovenyjguhkgiceddzwna.supabase.co/functions/v1/workos-auth/providers` still shows `"configured":true` (a 401 means "Verify JWT" got switched on: switch it off again).
+
+**Sign-in works only from exact addresses:** the live site and localhost:5173 / :5180. Vercel preview links no longer sign in (a pattern for them could be claimed by someone else's Vercel project and catch a sign-in). To test a preview, add its exact address to the `WORKOS_ALLOWED_ORIGINS` secret (comma-separated).
 
 **If sign-in breaks:** redeploy the v4 backup file (step 2 with the backup's code).
 

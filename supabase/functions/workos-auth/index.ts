@@ -31,10 +31,12 @@
 // to the Staging client. GMAIL_USER / GMAIL_APP_PASSWORD / SENDER_NAME are the
 // ones welcome-email already uses. SUPABASE_SERVICE_ROLE_KEY is built in.
 //
-// Deployed with verify_jwt = false: browsers call it directly. Every route checks
-// the page's origin against ORIGINS (no open redirects, no other site can use it),
-// and a provider round trip is bound to the browser that started it by a signed,
-// HttpOnly cookie.
+// DEPLOY WITH verify_jwt = false (dashboard: "Verify JWT" OFF; MCP deploy:
+// verify_jwt: false). Browsers call /providers, /start and /callback with no
+// Supabase token, so with the check on the gateway refuses every sign-in.
+// Every route checks the page's origin against ORIGINS (exact origins only: no
+// open redirects, no other site can use it), and a provider round trip is bound
+// to the browser that started it by a signed, HttpOnly cookie.
 import { SMTPClient } from "https://deno.land/x/denomailer@1.6.0/mod.ts";
 
 const WORKOS = "https://api.workos.com";
@@ -52,14 +54,16 @@ const DEFAULT_SITE = "https://attackedmap.vercel.app";
 // Email-code routes and direct provider starts (see the header): off unless asked for.
 const DIRECT_ROUTES = (Deno.env.get("BRIDGE_DIRECT_ROUTES") ?? "").trim().toLowerCase() === "on";
 
-// Pages allowed to use this function: the live site, its Vercel previews, and
-// the local dev servers. WORKOS_ALLOWED_ORIGINS adds more (comma-separated).
+// Pages allowed to use this function: the live site and the local dev servers,
+// exact origins only. No patterns: the callback hands the one-time sign-in token
+// to this page, and a pattern such as Vercel preview hosts can be claimed by
+// someone else's Vercel project. A preview that needs sign-in goes into
+// WORKOS_ALLOWED_ORIGINS (comma-separated exact origins).
 const ORIGINS = new Set([
   DEFAULT_SITE, "http://localhost:5173", "http://localhost:5180",
   ...(Deno.env.get("WORKOS_ALLOWED_ORIGINS") ?? "").split(",").map((s) => s.trim()).filter(Boolean),
 ]);
-const PREVIEW = /^https:\/\/attackedmap-[a-z0-9-]+-mohiawrai2609s-projects\.vercel\.app$/;
-const allowed = (origin: string | null) => !!origin && (ORIGINS.has(origin) || PREVIEW.test(origin));
+const allowed = (origin: string | null) => !!origin && ORIGINS.has(origin);
 
 const enc = new TextEncoder();
 const b64url = (bytes: Uint8Array) => btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
@@ -169,6 +173,7 @@ async function supabaseToken(email: string, meta: Record<string, unknown>, signI
 // WorkOS documents as covering both steps. app_metadata is service-role only.
 const TOTP_ISSUER = "Attacked.ai";
 const RECENT_SIGN_IN_S = 20 * 60;          // changing two-step needs a sign-in this recent
+const BRIDGE_HANDOFF_S = 10 * 60;          // bridge stamp -> the page's token exchange
 const SETUP_TTL_MS = 20 * 60_000;          // a scanned secret must be confirmed within this
 
 async function workosCall(method: "GET" | "POST" | "DELETE", path: string, body?: Record<string, unknown>, timeoutMs = 8000): Promise<Record<string, any>> {
@@ -188,9 +193,9 @@ const listFactors = async (workosUserId: string): Promise<Record<string, any>[]>
   return Array.isArray(j.data) ? j.data : [];
 };
 // Only the keys given change (the auth server merges app_metadata; null removes a key).
-async function setAppMeta(userId: string, changes: Record<string, unknown>): Promise<void> {
+async function setAppMeta(userId: string, changes: Record<string, unknown>, timeoutMs = 5000): Promise<void> {
   const r = await fetch(`${SB_URL}/auth/v1/admin/users/${encodeURIComponent(userId)}`, {
-    method: "PUT", headers: ADMIN, body: JSON.stringify({ app_metadata: changes }), signal: AbortSignal.timeout(5000),
+    method: "PUT", headers: ADMIN, body: JSON.stringify({ app_metadata: changes }), signal: AbortSignal.timeout(timeoutMs),
   });
   if (!r.ok) throw new Error(`could not update the account (${r.status})`);
 }
@@ -201,40 +206,54 @@ async function stampSignIn(user: Record<string, any>, s: { workosUserId: string;
     await setAppMeta(user.id, {
       workos_user_id: s.workosUserId || null, auth_method: s.method || null,
       strong_auth: s.method === "Passkey", signed_in_at: new Date().toISOString(),
-    });
+    }, 2500);
   } catch (e) { console.warn("[workos-auth] sign-in not stamped:", (e as Error).message); }
 }
 
 // The reader behind a request: the auth server checks the access token.
+// signedInAt is when THIS session was opened through the bridge, or 0. It
+// counts only the token exchange the bridge handed over (amr "otp"/"magiclink",
+// a few seconds after the bridge stamped app_metadata.signed_in_at), never
+// other fresh authentications (Supabase's own MFA, password or email-code
+// sign-ins), which skip WorkOS. amr keeps its time through token refreshes.
 async function readerFrom(req: Request): Promise<{ user: Record<string, any>; signedInAt: number } | null> {
   const m = /^Bearer\s+([A-Za-z0-9_-]+\.([A-Za-z0-9_-]+)\.[A-Za-z0-9_-]+)$/.exec(req.headers.get("authorization") ?? "");
   if (!m) return null;
   const r = await fetch(`${SB_URL}/auth/v1/user`, { headers: { apikey: SERVICE, Authorization: `Bearer ${m[1]}` }, signal: AbortSignal.timeout(5000) });
   if (!r.ok) return null;
   const user = await r.json().catch(() => null);
-  if (!user || !user.id || !EMAIL.test(String(user.email || ""))) return null;
-  // amr keeps the original sign-in time through token refreshes
+  if (!user || !user.id || !EMAIL.test(String(user.email || "")) || !user.email_confirmed_at) return null;
   let signedInAt = 0;
-  try {
-    const claims = JSON.parse(new TextDecoder().decode(fromB64url(m[2])));
-    for (const a of Array.isArray(claims.amr) ? claims.amr : []) signedInAt = Math.max(signedInAt, Number(a?.timestamp) || 0);
-  } catch { /* unreadable: not recent */ }
+  const stamp = Date.parse(String(user.app_metadata?.signed_in_at || "")) / 1000;
+  if (Number.isFinite(stamp)) {
+    try {
+      const claims = JSON.parse(new TextDecoder().decode(fromB64url(m[2])));
+      for (const a of Array.isArray(claims.amr) ? claims.amr : []) {
+        const t = Number(a?.timestamp) || 0;
+        if ((a?.method === "otp" || a?.method === "magiclink") && t - stamp >= -60 && t - stamp <= BRIDGE_HANDOFF_S) signedInAt = Math.max(signedInAt, t);
+      }
+    } catch { /* unreadable: not recent */ }
+  }
   return { user, signedInAt };
 }
-// The WorkOS account for a reader: the id the bridge recorded at sign-in when
-// its email still matches, otherwise found by the (confirmed) email.
-async function workosUserFor(user: Record<string, any>): Promise<Record<string, any> | null> {
+// The WorkOS account for a reader: the id the bridge recorded at sign-in, if
+// its (verified) email still matches. Changes (strict) use only that id; the
+// read-only status may also find the account by the confirmed email.
+async function workosUserFor(user: Record<string, any>, strict = false): Promise<Record<string, any> | null> {
   const email = String(user.email).toLowerCase();
+  const same = (u: Record<string, any> | null) => !!u && String(u.email || "").toLowerCase() === email && u.email_verified !== false;
   const known = user.app_metadata?.workos_user_id;
   if (typeof known === "string" && /^user_[A-Za-z0-9]+$/.test(known)) {
-    try {
-      const u = await workosCall("GET", `/user_management/users/${encodeURIComponent(known)}`);
-      if (String(u.email || "").toLowerCase() === email) return u;
-    } catch { /* fall back to the email */ }
+    let u: Record<string, any> | null = null;
+    try { u = await workosCall("GET", `/user_management/users/${encodeURIComponent(known)}`); }
+    catch (e) { if ((e as WorkOSError).status !== 404) throw e; }
+    if (same(u)) return u;
+    if (strict || u) return null;   // recorded account now belongs to another address: never guess
   }
+  if (strict) return null;
   const j = await workosCall("GET", `/user_management/users?email=${encodeURIComponent(email)}&limit=1`);
   const u = Array.isArray(j.data) ? j.data[0] : null;
-  return u && String(u.email || "").toLowerCase() === email ? u : null;
+  return same(u) ? u : null;
 }
 
 // ── TOTP (RFC 6238: HMAC-SHA1, 6 digits, 30 s) ──
@@ -296,22 +315,30 @@ async function reserveAttempt(userId: string): Promise<boolean> {
 }
 async function clearAttempts(userId: string): Promise<void> {
   try {
-    await fetch(`${SB_URL}/rest/v1/rpc/_mfa_attempt`, { method: "POST", headers: ADMIN, body: JSON.stringify({ p_user: userId, p_ok: true }), signal: AbortSignal.timeout(5000) });
-  } catch { /* expires on its own in 10 minutes */ }
+    const r = await fetch(`${SB_URL}/rest/v1/rpc/_mfa_attempt`, { method: "POST", headers: ADMIN, body: JSON.stringify({ p_user: userId, p_ok: true }), signal: AbortSignal.timeout(5000) });
+    if (!r.ok) console.warn("[workos-auth] attempt counter not cleared:", r.status);
+  } catch (e) { console.warn("[workos-auth] attempt counter not cleared:", (e as Error).message); }   // expires on its own in 10 minutes
 }
+// true / false = WorkOS says the code is right / wrong. A WorkOS failure
+// throws, so the reader sees "try again in a minute", not "wrong code".
 async function verifyWithWorkos(factorId: string, code: string): Promise<boolean> {
-  try {
-    const ch = await workosCall("POST", `/auth/factors/${encodeURIComponent(factorId)}/challenge`, {});
-    const v = await workosCall("POST", `/auth/challenges/${encodeURIComponent(String(ch.id || ""))}/verify`, { code });
-    return v.valid === true;
-  } catch { return false; }
+  const ch = await workosCall("POST", `/auth/factors/${encodeURIComponent(factorId)}/challenge`, {});
+  if (!ch.id) throw new WorkOSError("WorkOS returned no challenge");
+  const v = await workosCall("POST", `/auth/challenges/${encodeURIComponent(String(ch.id))}/verify`, { code });
+  return v.valid === true;
 }
-// Best effort: tells the reader their two-step setting changed.
+// Best effort: tells the reader their two-step setting changed. Waits at most
+// 4 s for the mail server; the send carries on in the background after that.
+async function tellReaderSoon(email: string, on: boolean): Promise<void> {
+  const p = tellReader(email, on);
+  try { (globalThis as any).EdgeRuntime?.waitUntil?.(p); } catch { /* not on the edge runtime */ }
+  await Promise.race([p, new Promise((r) => setTimeout(r, 4000))]);
+}
 async function tellReader(email: string, on: boolean): Promise<void> {
   const what = on ? "turned on" : "turned off";
   try {
     await sendMail(email, {
-      subject: `Two-step verification was ${what} on your Attacked.ai account`,
+      subject: `Two-step verification ${what} for your Attacked.ai account`,
       text: `Two-step verification was ${what} for your Attacked.ai account just now.\n\nIf this was you, there is nothing to do. If it wasn't, sign in and check Profile > Security, and contact the Attacked.ai team.`,
       html: `<p>Two-step verification was <strong>${what}</strong> for your Attacked.ai account just now.</p><p>If this was you, there is nothing to do. If it wasn't, sign in and check <strong>Profile &rarr; Security</strong>, and contact the Attacked.ai team.</p>`,
     });
@@ -319,15 +346,22 @@ async function tellReader(email: string, on: boolean): Promise<void> {
 }
 
 async function security(req: Request, path: string, origin: string | null): Promise<Response> {
-  const r = await readerFrom(req);
+  let r: Awaited<ReturnType<typeof readerFrom>>;
+  try { r = await readerFrom(req); }
+  catch (e) {
+    console.error("[workos-auth] security: reader check failed:", (e as Error).message);
+    return json({ error: "Security settings are unavailable right now. Try again in a minute." }, 502, origin);
+  }
   if (!r) return json({ error: "Sign in again to change your security settings." }, 401, origin);
   const { user } = r;
   const email = String(user.email).toLowerCase();
   const am: Record<string, any> = user.app_metadata || {};
   const recent = Date.now() / 1000 - r.signedInAt < RECENT_SIGN_IN_S;
   const view = { method: am.auth_method || null, strong: am.strong_auth === true, recent };
+  // Changes need a recent sign-in through the bridge; checked first, before any WorkOS call.
+  if (path !== "/security" && !recent) return json({ error: "For your safety, sign in again before changing two-step verification.", code: "reauth" }, 403, origin);
   try {
-    const wu = await workosUserFor(user);
+    const wu = await workosUserFor(user, path !== "/security");
     if (!wu) {
       if (path === "/security") return json({ workos: false, totp: { on: false }, ...view }, 200, origin);
       return json({ error: "Sign out, then sign in again with the Attacked.ai sign-in page first. Then turn this on.", code: "no_workos" }, 409, origin);
@@ -338,7 +372,6 @@ async function security(req: Request, path: string, origin: string | null): Prom
       const since = factor ? (factor.id === am.mfa_factor_id && am.mfa_since) || factor.created_at || null : null;
       return json({ workos: true, totp: { on: !!factor, since }, ...view }, 200, origin);
     }
-    if (!recent) return json({ error: "For your safety, sign in again before changing two-step verification.", code: "reauth" }, 403, origin);
     const body = await readJson(req);
 
     if (path === "/security/totp/start") {
@@ -361,13 +394,14 @@ async function security(req: Request, path: string, origin: string | null): Prom
       if (!code) return json({ error: "Enter the 6-digit code from your authenticator app." }, 400, origin);
       if (!(await reserveAttempt(user.id))) return json({ error: "Too many wrong codes. Wait 10 minutes, then try again." }, 429, origin);
       if (!(await totpMatches(secret, code))) return json({ error: "That code didn't match. Use the newest code in the app, and check your phone's clock is set automatically." }, 400, origin);
+      if ((await listFactors(wu.id)).length) return json({ error: "Two-step verification is already on." }, 409, origin);   // a second tab got there first
       const made = await workosCall("POST", `/user_management/users/${encodeURIComponent(wu.id)}/auth_factors`, { type: "totp", totp_issuer: TOTP_ISSUER, totp_user: email, totp_secret: secret });
       const f = made.authentication_factor || {};
       if (!f.id) throw new Error("WorkOS returned no factor");
       await clearAttempts(user.id);
       try { await setAppMeta(user.id, { mfa_factor_id: f.id, mfa_since: new Date().toISOString() }); }
       catch (e) { console.warn("[workos-auth] factor saved at WorkOS, not noted on the account:", (e as Error).message); }
-      await tellReader(email, true);
+      await tellReaderSoon(email, true);
       return json({ totp: { on: true } }, 200, origin);
     }
     if (path === "/security/totp/remove") {
@@ -379,7 +413,7 @@ async function security(req: Request, path: string, origin: string | null): Prom
       for (const f of factors) await workosCall("DELETE", `/auth/factors/${encodeURIComponent(f.id)}`);
       await clearAttempts(user.id);
       try { await setAppMeta(user.id, { mfa_factor_id: null, mfa_since: null }); } catch { /* status reads WorkOS */ }
-      await tellReader(email, false);
+      await tellReaderSoon(email, false);
       return json({ totp: { on: false } }, 200, origin);
     }
     return json({ error: "not found" }, 404, origin);
@@ -616,7 +650,11 @@ Deno.serve(async (req: Request): Promise<Response> => {
 
   if (req.method === "GET" && path === "/providers") return providersList(allowed(origin) ? origin : null);
   if (req.method === "GET" && path === "/start") {
-    if (!DIRECT_ROUTES && url.searchParams.get("provider") !== "authkit") return json({ error: "not found" }, 404, null);
+    if (!DIRECT_ROUTES && url.searchParams.get("provider") !== "authkit") {
+      let site = DEFAULT_SITE;
+      try { const o = new URL(url.searchParams.get("redirect") ?? "").origin; if (allowed(o)) site = o; } catch { /* default */ }
+      return back(site, "unavailable");
+    }
     return providerStart(url);
   }
   if (req.method === "GET" && path === "/callback") return providerCallback(req, url);
