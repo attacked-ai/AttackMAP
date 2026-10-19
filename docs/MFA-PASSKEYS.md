@@ -9,7 +9,8 @@
 
 | Part | State |
 |---|---|
-| WorkOS **Staging** (what the site uses today) | Passkeys ON with "offer a passkey" after password sign-in. Two-step **Optional**. Email verification required. Google, Microsoft, email code and password sign-in. |
+| WorkOS **Staging** (what the site uses today) | Passkeys ON with "offer a passkey" after password sign-in. Two-step **Optional** (someone set it to "Required" by 19 Oct, which forced every sign-in through the authenticator screen; set back to Optional on 19 Oct at the owner's request: **never forced, only suggested**). Email verification required. Google, Microsoft, email code and password sign-in. |
+| **Reminder card** (`src/auth/SecurityNudge.jsx`, 19 Oct) | A polite card once per visit for readers without two-step: "Set it up" (→ Profile → Security) or "Remind me later" (7, then 14, then 30 days). Hidden after passkey/SSO sign-ins, on profile/admin/map/checkout/legal pages, and while the bridge can't answer, so it **appears only once the bridge below is deployed**. Preview: `review/security-nudge-preview.html`. |
 | WorkOS **Production** | **Not set up.** Two-step off, passkeys off, no sign-in methods. Mohini's WorkOS role is read-only there, so a WorkOS **admin** must do it (§4). |
 | **Profile → Security** panel (`src/auth/SecurityPanel.jsx`) | Built, tested with a simulated session (`review/security-preview.html`). It turns two-step on (scan QR, confirm one code) and off (current code), explains passkeys, and shows how the last sign-in was made. |
 | Sign-in bridge `supabase/functions/workos-auth` | **Updated, NOT deployed** (the Supabase connector tools were switched off). Adds the `/security` routes and records `auth_method` at each sign-in. It also switches off two unused routes that skipped the WorkOS page. Backup of the live version (v4): `D:\attacked-dev\backups\workos-auth-v4-2026-10-17.ts`. |
