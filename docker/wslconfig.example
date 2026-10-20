@@ -1,0 +1,22 @@
+# Copy to  C:\Users\<you>\.wslconfig  (no extension)  BEFORE Docker Desktop's first
+# start, so its disks are created with these settings:  npm run local:doctor -- --fix-wsl
+# If Docker already runs: copy it, then  wsl --shutdown  (Docker Desktop restarts
+# its engine; the running Supabase containers come back with  npm run local:start).
+#
+# Docker Desktop runs inside WSL 2; without this file WSL may take up to half the
+# machine's RAM (this PC has 8 GB). These limits leave room for Vite + a browser.
+[wsl2]
+memory=3GB
+processors=2
+swap=2GB
+# Without swapFile the swap disk lands in %TEMP% on the full C: drive. Keep it on D:
+# (double backslashes are required in this file). The main VM disk is already on D:
+# because the installer was given --wsl-default-data-root (docker/install-docker-desktop.ps1).
+swapFile=D:\\DockerData\\wsl-swap.vhdx
+localhostForwarding=true
+
+[experimental]
+# Hand idle memory back to Windows; keep the VM disk small. Both apply to disks
+# created after the file is in place (sparseVhd) / at the next start.
+autoMemoryReclaim=gradual
+sparseVhd=true

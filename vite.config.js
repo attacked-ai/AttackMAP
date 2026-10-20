@@ -7,6 +7,13 @@ import { directSignin } from "./scripts/dev-direct-signin.mjs";
 export default defineConfig(({ command, mode }) => {
   const env = loadEnv(mode, process.cwd(), "VITE_");
 
+  // `--mode docker` (npm run dev:docker) means the LOCAL Supabase stack. With no
+  // .env.docker yet (stack never started, or `local:start` failed) Vite would
+  // silently fall back to .env and the "local" session would talk to live.
+  if (mode === "docker" && !/^http:\/\/(127\.0\.0\.1|localhost):\d+$/.test(env.VITE_SUPABASE_URL || "")) {
+    throw new Error(`--mode docker, but VITE_SUPABASE_URL is "${env.VITE_SUPABASE_URL || ""}" (not the local stack). Run  npm run local:start  (or  npm run local:env ) to write .env.docker first.`);
+  }
+
   if (command === "build") {
     // Without these the app cannot reach its data and would ship a blank page.
     const missing = ["VITE_SUPABASE_URL", "VITE_SUPABASE_ANON_KEY"].filter((k) => !env[k]);

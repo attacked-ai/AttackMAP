@@ -6,7 +6,19 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "dev:docker": "vite --mode docker",
+    "build:docker": "vite build --mode docker",
+    "preview:docker": "vite preview --mode docker",
+    "local:doctor": "node scripts/docker-local.mjs doctor",
+    "local:start": "node scripts/docker-local.mjs start",
+    "local:stop": "node scripts/docker-local.mjs stop",
+    "local:status": "node scripts/docker-local.mjs status",
+    "local:env": "node scripts/docker-local.mjs env",
+    "local:reset": "node scripts/docker-local.mjs reset",
+    "local:verify": "node scripts/docker-local.mjs verify",
+    "local:dump": "node scripts/docker-local.mjs dump",
+    "local:dev": "node scripts/docker-local.mjs start && vite --mode docker"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.107.0",

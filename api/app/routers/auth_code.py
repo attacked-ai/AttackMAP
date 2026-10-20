@@ -86,6 +86,12 @@ async def send_code(body: SendCodeBody, background: BackgroundTasks):
         raise HTTPException(400, "that does not look like an email address")
     if not settings.server_key:
         raise HTTPException(503, "SUPABASE_SECRET_KEY is required to issue codes")
+    # Check the sender BEFORE issuing a code: the send runs in the background,
+    # so without this the reader is told "sent" and a code exists that no
+    # email will ever carry (seen with the local Docker stack, api/.env.docker
+    # has no Gmail values). A 503 here is surfaced by the app as is.
+    if not ((settings.gmail_user or "").strip() and "".join((settings.gmail_app_password or "").split())):
+        raise HTTPException(503, "code email is not configured on the API (GMAIL_USER / GMAIL_APP_PASSWORD)")
     admin = {"apikey": settings.server_key, "Authorization": f"Bearer {settings.server_key}", "Content-Type": "application/json"}
     url = f"{settings.supabase_url}/auth/v1/admin/generate_link"
     async with httpx.AsyncClient(timeout=20) as c:

@@ -49,10 +49,11 @@ const readBody = (req) => new Promise((ok, fail) => {
 
 export function directSignin() {
   let root = process.cwd();
+  let mode = "development";
   return {
     name: "attacked-dev-direct-signin",
     apply: "serve",
-    configResolved(cfg) { root = cfg.root; },
+    configResolved(cfg) { root = cfg.root; mode = cfg.mode; },
     configureServer(server) {
       server.middlewares.use("/__dev/direct-signin", async (req, res) => {
         if (req.method !== "POST") return send(res, 405, { error: "POST only" });
@@ -67,11 +68,18 @@ export function directSignin() {
         if ((site && site !== "same-origin") || (origin && origin !== `http://${req.headers.host}`) || !json) {
           return send(res, 403, { error: "Cross-site request refused." });
         }
-        const env = { ...readEnv(root, ".env"), ...readEnv(root, ".env.local") };
+        // Same files, same precedence as Vite: .env < .env.local < .env.<mode> < .env.<mode>.local.
+        // `vite --mode docker` therefore reads .env.docker (the local Docker stack).
+        const env = { ...readEnv(root, ".env"), ...readEnv(root, ".env.local"), ...readEnv(root, `.env.${mode}`), ...readEnv(root, `.env.${mode}.local`) };
         if (env.VITE_DIRECT_SIGNIN === "0") return send(res, 404, { error: "Direct sign-in is switched off (VITE_DIRECT_SIGNIN=0)." });
         const URL_ = env.VITE_SUPABASE_URL;
-        const SECRET = readEnv(root, "api/.env").SUPABASE_SECRET_KEY;
-        if (!URL_ || !SECRET) return send(res, 500, { error: "Needs VITE_SUPABASE_URL in .env and SUPABASE_SECRET_KEY in api/.env." });
+        // The secret for THIS backend: .env.<mode> may carry one (the local stack's
+        // service_role key, not VITE_-prefixed so it never reaches the browser);
+        // otherwise the live secret from api/.env, as before.
+        // Only the default mode may fall back to api/.env: in any other mode a
+        // missing .env.<mode> must never pair the live secret with a test sign-in.
+        const SECRET = env.SUPABASE_SECRET_KEY || (mode === "development" ? readEnv(root, "api/.env").SUPABASE_SECRET_KEY : undefined);
+        if (!URL_ || !SECRET) return send(res, 500, { error: mode === "development" ? "Needs VITE_SUPABASE_URL in .env and SUPABASE_SECRET_KEY in api/.env." : `Needs VITE_SUPABASE_URL and SUPABASE_SECRET_KEY in .env.${mode} (run: npm run local:env).` });
 
         let body;
         try { body = await readBody(req); } catch { return send(res, 400, { error: "Bad request body." }); }

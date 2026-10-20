@@ -1,0 +1,65 @@
+# docker-compose.yml — the pieces of Attacked.ai that are NOT the Supabase stack.
+#
+# The database, auth, PostgREST, storage, Studio, Mailpit and edge functions are
+# Docker containers too, but the Supabase CLI manages them from
+# supabase/config.toml:   npm run local:start   (see LOCAL_DOCKER_SETUP.md).
+# This file adds the optional services on top. Both are opt-in "profiles", so a
+# plain `docker compose up` starts nothing by accident.
+#
+#   docker compose --profile api up --build      FastAPI layer on http://localhost:8000
+#                                                 (then set VITE_API_URL=http://localhost:8000 in .env.docker)
+#   docker compose --profile web up               Vite dev server inside Docker on http://localhost:5173
+#                                                 (optional: `npm run dev:docker` on the host is faster on Windows)
+#
+# Requires .env.docker + api/.env.docker, written by `npm run local:env`.
+
+name: attackedmap
+
+services:
+  # The FastAPI backend (api/), same image Cloud Run would run. It talks to the
+  # local Supabase stack through the host (host.docker.internal:54321).
+  api:
+    profiles: ["api"]
+    build:
+      context: ./api
+    env_file:
+      - api/.env.docker
+    environment:
+      PORT: "8080"
+    ports:
+      - "8000:8080"
+    volumes:
+      # The 310 baked reports live on this PC, not in git; read-only inside.
+      - ./public/reports:/srv/reports:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8080/health').status==200 else 1)\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+
+  # Vite dev server in a container. Node modules live in a named volume so the
+  # Windows node_modules folder is never mixed with Linux binaries.
+  web:
+    profiles: ["web"]
+    image: node:24-alpine
+    working_dir: /app
+    command: sh -c "npm ci --no-audit --no-fund && npm run dev:docker -- --host 0.0.0.0 --port 5173 --strictPort"
+    environment:
+      BROWSER: none              # vite.config.js has open:true; no browser inside the container
+      CHOKIDAR_USEPOLLING: "1"   # file watching across the Windows bind mount
+      # The dev-only direct sign-in route refuses non-loopback callers, and the
+      # browser's requests reach the container through Docker's bridge. Turn it
+      # off here (process env beats .env.docker in Vite) so the sign-in modal
+      # offers the real 6-digit code flow; read the code in Mailpit (:54324).
+      VITE_DIRECT_SIGNIN: "0"
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./:/app
+      - web_node_modules:/app/node_modules
+
+volumes:
+  web_node_modules:

@@ -11,3 +11,12 @@ Attacked.ai Demo Script.docx
 
 # The FastAPI service is hosted separately, never as Vercel functions
 api/
+
+# Local Docker stack: never part of a Vercel upload
+.env.docker
+.env.*.local
+api/.env.docker
+supabase/seed/
+supabase/.temp/
+docker/
+docker-compose.yml

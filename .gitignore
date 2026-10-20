@@ -18,3 +18,11 @@ Thumbs.db
 public/reports/
 __pycache__/
 *.pyc
+
+# Local Docker stack (LOCAL_DOCKER_SETUP.md). .env.docker / api/.env.docker are
+# already covered by .env.*; the examples are committed, the live data copy is not.
+!.env.docker.example
+supabase/seed/*.sql
+supabase/seed/*.bak
+supabase/.temp/
+supabase/.branches/
