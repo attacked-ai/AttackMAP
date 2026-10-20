@@ -8983,7 +8983,7 @@ function ArchivePanel({ archiveIndex, currentDate, onLoad, onDelete, onClose, bu
 
             {timeline.playDates.length > 0 && (
               <div style={{ marginTop: 12 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                <div className="map-play-row" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
                   <span style={{ fontFamily: "Inter, sans-serif", fontSize: 14, fontWeight: 800, color: timeline.playing ? BRAND.gold : BRAND.white }}>{cur || "—"}</span>
                   <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
                     <button onClick={() => timeline.onPlayBrief && timeline.onPlayBrief()}
@@ -10458,7 +10458,7 @@ export default function GlobalAttackMap() {
       {/* MOBILE — Layers bottom sheet: map mode, view mode, layer toggles, key */}
       {isMobile && showLayers && (
         <div onClick={() => setShowLayers(false)} style={{ position: "fixed", inset: 0, zIndex: 120, background: "rgba(0,0,0,0.55)" }}>
-          <div onClick={e => e.stopPropagation()} style={{
+          <div className="map-layers-sheet" onClick={e => e.stopPropagation()} style={{
             position: "absolute", left: 0, right: 0, bottom: 0,
             background: "#141416", borderTop: "1px solid #333", borderRadius: 0,
             padding: "16px 16px calc(22px + env(safe-area-inset-bottom))", maxHeight: "82vh", overflowY: "auto",
@@ -11204,7 +11204,7 @@ export default function GlobalAttackMap() {
                 })}
               </div>
               {/* Clear all + fleet/audit buttons */}
-              <div style={{ display: "flex", gap: 6, paddingTop: 10, borderTop: `1px solid ${BRAND.borderSubtle}` }}>
+              <div className="map-popover-actions" style={{ display: "flex", gap: 6, paddingTop: 10, borderTop: `1px solid ${BRAND.borderSubtle}` }}>
                 <button onClick={() => {
                     setActiveReporters(new Set());
                     setActiveCats(new Set());
