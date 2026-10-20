@@ -34,11 +34,16 @@ page ── GET /start?provider=authkit&screen_hint=…&redirect=<page>?…&wos_
   token is ignored (login CSRF). The function also drops any `#fragment` from the
   return address before appending the token.
 - The older in-window routes (`/email/start`, `/email/verify`, `/start?provider=GoogleOAuth`)
-  still exist in the function but the site no longer uses them.
+  skip the WorkOS page (and its two-step check). From bridge v5 they are off unless the
+  secret `BRIDGE_DIRECT_ROUTES=on` is set; a switched-off direct start goes back to the
+  site with `signin_error=unavailable`.
 
 - Supabase Edge Function `workos-auth` (project `ovenyjguhkgiceddzwna`, verify_jwt off).
-  Only these sites can use it: attackedmap.vercel.app, its Vercel previews,
-  localhost:5173 and localhost:5180.
+  Only these exact sites can use it: attackedmap.vercel.app, localhost:5173 and
+  localhost:5180. From bridge v5 Vercel previews are NOT allowed by pattern (another
+  Vercel team could claim a matching name and receive the sign-in token). To sign in
+  on a preview, add its exact origin to the `WORKOS_ALLOWED_ORIGINS` secret
+  (comma-separated) and remove it after testing.
 - WorkOS Staging client `client_01M4APWJ40K0B75B3ZYZJ6B0DW`. Redirect URI
   registered: `https://ovenyjguhkgiceddzwna.supabase.co/functions/v1/workos-auth/callback`.
 - The site build is switched with `VITE_AUTH_PROVIDER=workos`. Without it the site
@@ -75,7 +80,7 @@ page ── GET /start?provider=authkit&screen_hint=…&redirect=<page>?…&wos_
 | Where | Address |
 |---|---|
 | Local | http://localhost:5180 (run: `VITE_AUTH_PROVIDER=workos VITE_API_URL= npx vite --port 5180`) |
-| Vercel preview | https://attackedmap-pis0ao20p-mohiawrai2609s-projects.vercel.app (open while signed in to Vercel) |
+| Vercel preview | sign-in works only after its exact origin is added to `WORKOS_ALLOWED_ORIGINS` (bridge v5) |
 
 1. **New account by code**: *Sign up free* → fill everything → *Create your account*
    → code arrives from Attacked.ai → enter it → dashboard. Profile shows company and industry.

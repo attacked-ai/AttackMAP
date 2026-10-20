@@ -21,6 +21,7 @@
 - **No half-finished setups.** The bridge makes the secret and checks the first code itself (RFC 6238; tested against the official test values). Only then does it register the factor with WorkOS, so no half-made factor is ever left behind.
 - **Changes are guarded.** Turning two-step on or off needs a sign-in within the last 20 minutes and a correct code. The reader is emailed when it changes.
 - **No one else's settings.** Everything works from the reader's own verified session; nobody can see or change another reader's setting.
+- **"Recent sign-in" means this session came through the Attacked.ai sign-in page** in the last 20 minutes (the bridge stamps the time; Supabase's own MFA, password or email-code sessions don't count). Signing in on a second device makes the first device's session not recent; it just asks to sign in again before a change.
 
 ## 1. Switch it on (two steps)
 

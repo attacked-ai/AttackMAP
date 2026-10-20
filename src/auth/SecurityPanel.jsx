@@ -41,7 +41,7 @@ const finePointer = () => { try { return window.matchMedia("(pointer: fine)").ma
 export function SecurityPanel() {
   const { tier, signOut } = useAuth();
   const [status, setStatus] = useState(null);      // { workos, totp: { on, since }, method, strong, recent }
-  const [loadErr, setLoadErr] = useState(null);
+  const [loadErr, setLoadErr] = useState(null);    // { text, reauth }
   const [step, setStep] = useState("idle");        // idle | setup | remove
   const [setup, setSetup] = useState(null);        // { setup, secret, uri, qr }
   const [code, setCode] = useState("");
@@ -50,7 +50,7 @@ export function SecurityPanel() {
   const [copy, setCopy] = useState(null);          // "ok" | "failed"
   const titleRef = useRef(null);
 
-  const load = () => securityApi("").then((s) => { setStatus(s); setLoadErr(null); }).catch((e) => setLoadErr(e.message));
+  const load = () => securityApi("").then((s) => { setStatus(s); setLoadErr(null); }).catch((e) => setLoadErr({ text: e.message, reauth: e.code === "reauth" }));
   useEffect(() => { if (WORKOS) load(); }, []);
   useEffect(() => {
     if (window.location.hash === "#security") setTimeout(() => document.getElementById("security")?.scrollIntoView({ behavior: "smooth", block: "start" }), 300);
@@ -60,7 +60,11 @@ export function SecurityPanel() {
   const run = async (name, fn) => {
     setBusy(name); setMsg(null);
     try { await fn(); }
-    catch (e) { setMsg({ ok: false, text: e.message, reauth: e.code === "reauth" || e.code === "no_workos" }); }
+    catch (e) {
+      // Changed in another tab or device meanwhile: show what is true now.
+      if (e.code === "state_changed") { setStep("idle"); setSetup(null); setCode(""); load(); }
+      setMsg({ ok: false, text: e.message, reauth: e.code === "reauth" || e.code === "no_workos" });
+    }
     finally { setBusy(null); }
   };
   const start = () => run("start", async () => { setSetup(await securityApi("/totp/start", {})); setCode(""); setCopy(null); setStep("setup"); });
@@ -99,8 +103,10 @@ export function SecurityPanel() {
 
       {loadErr && (
         <div role="alert" style={{ ...card, background: C.warnBg, borderColor: "#F1DE9C", fontSize: 13, color: C.ink2, display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
-          <span style={{ flex: "1 1 220px" }}>{loadErr}</span>
-          <button type="button" style={btn(false)} onClick={() => { setLoadErr(null); load(); }}>Try again</button>
+          <span style={{ flex: "1 1 220px" }}>{loadErr.text}</span>
+          {loadErr.reauth
+            ? <button type="button" style={btn(true)} onClick={signInAgain}>Sign in again</button>
+            : <button type="button" style={btn(false)} onClick={() => { setLoadErr(null); load(); }}>Try again</button>}
         </div>
       )}
 
