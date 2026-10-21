@@ -15,6 +15,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
+import QRCode from "qrcode";
 
 export const PDF_DIR = process.env.REPORT_PDF_DIR || path.join(process.cwd(), "reports-pdf");
 export const REF = /^ATK-[A-Za-z0-9-]+$/;
@@ -55,12 +56,26 @@ export async function stampReportPdf({ ref, name, role, email = "", userId = "",
   const pages = doc.getPages();
   if (pages.length < 2) throw new ReportPdfError(500, "master_too_short");
 
-  // 1. the licence box on page 2
+  // 1. the licence box on page 2: paint over the master's grey "Issued at download", write the reader
   const p2 = pages[1], H2 = p2.getHeight();
+  const WHITE = rgb(1, 1, 1);
   for (const [k, rect] of Object.entries(map.box)) {
     if (values[k] == null) continue;   // an older map without the email row
+    const cov = map.cover && map.cover[k];
+    if (cov) p2.drawRectangle({ x: cov[0] - 1, y: H2 - (cov[3] + 1), width: cov[2] - cov[0] + 2, height: cov[3] - cov[1] + 2, color: WHITE, borderWidth: 0 });
     const [fontName, size] = map.fonts[k];
     p2.drawText(values[k], { x: rect[0], y: H2 - (rect[3] - size * 0.24), size, font: fonts[fontName], color: INK });
+  }
+  // 1b. the one QR code: the live edition's URL carrying this copy's number
+  if (map.qr && map.url) {
+    const [x0, y0, x1, y1] = map.qr;
+    const code = QRCode.create(map.url + (map.url.includes("?") ? "&" : "?") + "copy=" + lid.split("/ ").pop(), { errorCorrectionLevel: "M" });
+    const n = code.modules.size, quiet = 2, cell = (x1 - x0) / (n + 2 * quiet);
+    p2.drawRectangle({ x: x0 - 2, y: H2 - (y1 + 2), width: x1 - x0 + 4, height: y1 - y0 + 4, color: WHITE, borderWidth: 0 });
+    for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) {
+      if (!code.modules.get(r, c)) continue;
+      p2.drawRectangle({ x: x0 + (c + quiet) * cell, y: H2 - (y0 + (r + quiet + 1) * cell) - 0.15, width: cell + 0.15, height: cell + 0.15, color: INK, borderWidth: 0 });
+    }
   }
   // 2. the footer line, every page but the cover
   const line = `Licensed to ${name} \u00b7 ${role}`;
