@@ -15,7 +15,7 @@
 import React, { useEffect, useState, useRef } from "react";
 import { supabase } from "../lib/supabaseClient";
 import { isSubscriber } from "../lib/taxonomy";
-import { prepareReportFrame } from "../lib/reportLock";
+import { prepareReportFrame, readerLicence } from "../lib/reportLock";
 import { reportHtml } from "../lib/api";
 import { fetchFullReport, fetchReportHtml, listPublishedReports } from "../lib/reports";
 import { listBroadcasts, formatDuration, isAudioFile } from "../lib/broadcasts";
@@ -567,7 +567,7 @@ const PREVIEW_DIR = (() => {
   try { return new URLSearchParams(window.location.search).get("design") === "blur" ? "reports-blur" : "reports"; } catch { return "reports"; }
 })();
 
-function ReportFrame({ article, onBack, onMap, user, subscriber, authReady }) {
+function ReportFrame({ article, onBack, onMap, user, profile, subscriber, authReady }) {
   const ref = useRef(null);
   const reportRef = article.reportRef || article.id;
   // Where the HTML comes from, in order:
@@ -595,11 +595,11 @@ function ReportFrame({ article, onBack, onMap, user, subscriber, authReady }) {
   }, [reportRef, subscriber, authReady]);
   useEffect(() => {
     const fr = ref.current; if (!fr) return;
-    const onLoad = () => { prepareReportFrame(fr, { subscriber, onSubscribe: () => { window.location.href = "/?subscribe"; }, readerName: user?.email || "", reportRef }); };
+    const onLoad = () => { prepareReportFrame(fr, { subscriber, onSubscribe: () => { window.location.href = "/?subscribe"; }, readerName: user?.email || "", reportRef, reader: readerLicence(profile, user, subscriber) }); };
     fr.addEventListener("load", onLoad);
     if (fr.contentDocument?.readyState === "complete" && fr.contentDocument.body?.children.length) onLoad();
     return () => fr.removeEventListener("load", onLoad);
-  }, [article?.reportRef, subscriber, user?.email, doc]); // doc: the frame mounts only once the API answered
+  }, [article?.reportRef, subscriber, user?.email, profile, doc]); // doc: the frame mounts only once the API answered
   return (
     <main style={{ background: "#FFFFFF", fontFamily: "Inter, sans-serif", position: "relative" }}>
       <button className="rf-back" onClick={onBack} style={{
@@ -672,7 +672,7 @@ function shapeRow(r, reportByIncident = {}) {
 }
 
 export function AttackHub() {
-  const { user, tier, loading: authLoading } = useAuth();
+  const { user, tier, profile, loading: authLoading } = useAuth();
   const [authOpen, setAuthOpen] = useState(false);
   const [reportIds, setReportIds] = useState(null);  // Set of incident ids with a baked report
   const [articles, setArticles] = useState([]);
@@ -1008,7 +1008,7 @@ export function AttackHub() {
         // Resolve the ref at render time: the manifest can arrive after the
         // incident rows did, so the row's own reportRef may still be null.
         (() => { const ref = selected.reportRef || reportByIncident[String(selected.id)] || null; return reportIds && ref && reportIds.has(ref); })()
-          ? <ReportFrame article={{ ...selected, reportRef: selected.reportRef || reportByIncident[String(selected.id)] }} onBack={() => setSelected(null)} onMap={openMap} user={user} subscriber={isSubscriber(tier)} authReady={!authLoading} />
+          ? <ReportFrame article={{ ...selected, reportRef: selected.reportRef || reportByIncident[String(selected.id)] }} onBack={() => setSelected(null)} onMap={openMap} user={user} profile={profile} subscriber={isSubscriber(tier)} authReady={!authLoading} />
           : <ArticleView article={selected} onBack={() => setSelected(null)} onMap={openMap} user={user} />
       ) : (
         <>

@@ -30,6 +30,8 @@ export const latin = (s, max) => String(s || "").replace(/[^\x20-\x7E\xA0-\xFF]/
 export class ReportPdfError extends Error { constructor(status, message) { super(message); this.status = status; } }
 
 export async function stampReportPdf({ ref, name, role, email = "", userId = "", now = new Date() }) {
+  email = latin(email, 60);
+  email = latin(email, 60);
   if (!REF.test(String(ref || ""))) throw new ReportPdfError(400, "bad_ref");
   let master, map;
   try {
@@ -45,7 +47,7 @@ export async function stampReportPdf({ ref, name, role, email = "", userId = "",
   const stamp = `${issued}, ${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
   // Stable per reader and day; the account id makes it traceable to the login, not just the typed name.
   const lid = `${ref} / L-${createHash("sha1").update(`${ref}|${name}|${role}|${userId}|${issued}`).digest("hex").slice(0, 8).toUpperCase()}`;
-  const values = { name, role, id: lid, issued };
+  const values = { name, role, email, id: lid, issued };
 
   const doc = await PDFDocument.load(master, { updateMetadata: false });
   const fonts = {};
@@ -56,6 +58,7 @@ export async function stampReportPdf({ ref, name, role, email = "", userId = "",
   // 1. the licence box on page 2
   const p2 = pages[1], H2 = p2.getHeight();
   for (const [k, rect] of Object.entries(map.box)) {
+    if (values[k] == null) continue;   // an older map without the email row
     const [fontName, size] = map.fonts[k];
     p2.drawText(values[k], { x: rect[0], y: H2 - (rect[3] - size * 0.24), size, font: fonts[fontName], color: INK });
   }

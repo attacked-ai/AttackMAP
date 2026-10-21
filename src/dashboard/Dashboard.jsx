@@ -23,7 +23,7 @@ import { SiteNav } from "../auth/SiteNav";
 import { CATEGORY_NAME, INDUSTRIES, ROLES, SECTORS, SEVERITY, isSubscriber, tierLabel } from "../lib/taxonomy";
 import { loadCounts, loadIncidentDetail, loadIndustry, loadIndustryExtras, loadReportIndex, reportRefFor } from "./data";
 import { incidentImage, incidentPhoto, industryPhoto } from "../lib/images";
-import { prepareReportFrame } from "../lib/reportLock";
+import { readerLicence, prepareReportFrame } from "../lib/reportLock";
 import { reportHtml } from "../lib/api";
 import { fetchFullReport, fetchReportHtml } from "../lib/reports";
 import "./dashboard.css";
@@ -248,7 +248,7 @@ function YourIndustry({ P, name, subscriber, query, onOpen, onSubscribe, go }) {
 
 // "Your plan" — the one place a signed-in reader sees their tier and switches
 // it. The nav's "Manage subscription" lands here (?subscriptions → alerts).
-function ReportFrame({ i, reportRef, subscriber, onSubscribe, readerName }) {
+function ReportFrame({ i, reportRef, subscriber, onSubscribe, readerName, reader }) {
   const ref = useRef(null);
   const { loading: authLoading } = useAuth();   // decide only once the tier is known
   // The report scrolls inside its own .reader wrapper (body overflow hidden),
@@ -295,18 +295,18 @@ function ReportFrame({ i, reportRef, subscriber, onSubscribe, readerName }) {
   }, [reportRef, doc]);
   useEffect(() => {
     const fr = ref.current; if (!fr) return;
-    const onLoad = () => { prepareReportFrame(fr, { subscriber, onSubscribe, readerName, reportRef }); };
+    const onLoad = () => { prepareReportFrame(fr, { subscriber, onSubscribe, readerName, reportRef, reader }); };
     fr.addEventListener("load", onLoad);
     if (fr.contentDocument?.readyState === "complete" && fr.contentDocument.body?.children.length) onLoad();
     return () => { fr.removeEventListener("load", onLoad); };
-  }, [reportRef, subscriber, onSubscribe, readerName, doc]); // doc: the frame mounts only once the API answered
+  }, [reportRef, subscriber, onSubscribe, readerName, reader, doc]); // doc: the frame mounts only once the API answered
   if (doc === undefined) return <div className="panel empty mono" style={{ margin: 22 }}>Loading the report…</div>;
   return doc
     ? <iframe ref={ref} className="report-frame" srcDoc={doc} title={i.headline} style={{ height: h }} />
     : <iframe ref={ref} className="report-frame" src={`/reports/${encodeURIComponent(reportRef)}.html`} title={i.headline} style={{ height: h }} />;
 }
 
-function ArticleView({ i: incoming, subscriber, back, backLabel, onSubscribe, readerName }) {
+function ArticleView({ i: incoming, subscriber, back, backLabel, onSubscribe, readerName, reader }) {
   const reportRef = reportRefFor(incoming.id);
   const [detail, setDetail] = useState(null);
   const [err, setErr] = useState(null);
@@ -331,7 +331,7 @@ function ArticleView({ i: incoming, subscriber, back, backLabel, onSubscribe, re
           <div className="report-bar-meta"><Sev i={i} /><span className="cat">{i.cat} · {i.subcat || i.catName}</span><span className="mono" style={{ fontSize: 11, color: "var(--muted-light)" }}>{fmtDay(i.day)}</span><span className="mono" style={{ fontSize: 11, color: "var(--gold-text, #8A6D00)" }}>Full report · {reportRef}</span></div>
           <a className="btn" href={mapHref(i)} target="_blank" rel="noopener"><Icon name="pin" style={{ width: 13, height: 13, flexBasis: 13 }} /> On map</a>
         </div>
-        <ReportFrame i={i} reportRef={reportRef} subscriber={subscriber} onSubscribe={onSubscribe} readerName={readerName} />
+        <ReportFrame i={i} reportRef={reportRef} subscriber={subscriber} onSubscribe={onSubscribe} readerName={readerName} reader={reader} />
       </div>
     );
   }
@@ -522,7 +522,7 @@ export function Dashboard({ initialPage = "dashboard" }) {
           {err && <div className="content"><div className="panel empty" style={{ color: "#B21F31" }}>Could not load your industry: {err}</div></div>}
           {!P && !err && <div className="content"><div className="panel empty mono">Loading {industry}…</div></div>}
           {P && page === "dashboard" && <YourIndustry P={P} name={name} subscriber={subscriber} query={query} onOpen={openArticle} onSubscribe={() => openSubscribe()} go={go} />}
-          {P && page === "article" && article && <ArticleView key={`${article.id}-${reportsReady}`} readerName={profile?.full_name || user?.email || ""} i={article} subscriber={subscriber} back={() => go(lastPage)} backLabel="Back to your industry" onSubscribe={() => openSubscribe()} />}
+          {P && page === "article" && article && <ArticleView key={`${article.id}-${reportsReady}`} readerName={profile?.full_name || user?.email || ""} reader={readerLicence(profile, user, subscriber)} i={article} subscriber={subscriber} back={() => go(lastPage)} backLabel="Back to your industry" onSubscribe={() => openSubscribe()} />}
         </main>
       </div>
 

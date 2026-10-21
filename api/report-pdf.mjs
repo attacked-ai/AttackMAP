@@ -3,15 +3,15 @@
 // handler at /api/report-pdf (vite.config.js), so localhost behaves alike.
 //
 //   POST /api/report-pdf   Authorization: Bearer <Supabase access token>
-//                          { "ref": "ATK-2026-0908-NATS", "name": "…", "role": "…" }
+//                          { "ref": "ATK-2026-0908-NATS" }
 //   200  application/pdf, Content-Disposition attachment, X-Licence-Id
 //   401  no token · 403 not a subscriber · 404 no print edition for that ref
 //
 // Who may download is decided exactly as for /reports-full/ (src/lib/reportGate.js:
-// the database's is_subscriber() on the verified token). The name and role come
-// from the report's licence gate (what the reader typed); the account's email
-// and id go into the licence id and the metadata, so a copy is always traceable
-// to the login, whatever name was typed. Masters: reports-pdf/<ref>.pdf +
+// the database's is_subscriber() on the verified token). The licence is the
+// reader's own profile (full name, job title, company, account email), read
+// here with their token: nothing typed, nothing to forge. The account id goes
+// into the licence id, so a copy is always traceable to the login. Masters: reports-pdf/<ref>.pdf +
 // <ref>.stamp.json, made by the print build (see api/_lib/reportPdf.mjs).
 import { bearerToken, isSubscriberToken, tokenClaims } from "../src/lib/reportGate.js";
 import { latin, stampReportPdf } from "./_lib/reportPdf.mjs";
@@ -31,6 +31,19 @@ function send(res, status, body, headers = {}) {
 }
 
 // Vercel parses a JSON body into req.body; the Vite dev server hands over the raw stream.
+// The reader's profile row, through the public.profiles view with their own token
+// (the same read the app makes); null when the view or the row is missing.
+async function readProfile(token, sub) {
+  try {
+    const r = await fetch(`${OPTS.supabaseUrl.replace(/\/$/, "")}/rest/v1/profiles?id=eq.${encodeURIComponent(sub)}&select=full_name,role,company,email,industry,tier`, {
+      headers: { apikey: OPTS.anonKey, Authorization: `Bearer ${token}`, Accept: "application/json" }, signal: AbortSignal.timeout(4000),
+    });
+    if (!r.ok) return null;
+    const rows = await r.json();
+    return Array.isArray(rows) && rows[0] ? rows[0] : null;
+  } catch { return null; }
+}
+
 async function readBody(req) {
   if (req.body !== undefined && req.body !== null) return typeof req.body === "string" ? JSON.parse(req.body || "{}") : req.body;
   const chunks = [];
@@ -49,8 +62,11 @@ export default async function handler(req, res) {
   try { body = await readBody(req); } catch { return send(res, 400, { error: "bad_body" }); }
   const c = tokenClaims(token) || {};
   const ref = String(body.ref || "");
+  const prof = (await readProfile(token, c.sub || "")) || {};
+  const name = prof.full_name || (c.user_metadata && c.user_metadata.full_name) || c.email || "";
+  const role = [prof.role, prof.company].filter(Boolean).join(" \u00b7 ") || "Subscriber";
   try {
-    const out = await stampReportPdf({ ref, name: body.name, role: body.role, email: c.email || "", userId: c.sub || "" });
+    const out = await stampReportPdf({ ref, name, role, email: prof.email || c.email || "", userId: c.sub || "" });
     return send(res, 200, out.bytes, {
       "content-type": "application/pdf",
       "content-disposition": `attachment; filename="${ref}.pdf"`,

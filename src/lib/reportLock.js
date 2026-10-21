@@ -40,11 +40,12 @@ export async function downloadLicensedPdf(frame, reportRef, lic) {
   const { data } = await supabase.auth.getSession();
   const token = data?.session?.access_token;
   if (!token) throw new Error("sign_in");
-  const name = (lic && lic.name) || "", role = (lic && lic.role) || "";
+  // only the ref: the server stamps the profile behind the token (lic is the frame's copy of the same profile, for its own display)
+  void lic;
   const r = await fetch("/api/report-pdf", {
     method: "POST", cache: "no-store",
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ ref: reportRef, name, role }),
+    body: JSON.stringify({ ref: reportRef }),
   });
   if (!r.ok) throw new Error(String(r.status));
   const blob = await r.blob();
@@ -180,10 +181,32 @@ function addMobileNav(doc) {
 
 // Stamp the licence line the report prints, hide any in-report navigation the
 // host page owns, and gate the subscriber sections for free readers.
-export function prepareReportFrame(frame, { subscriber, onSubscribe, readerName, reportRef } = {}) {
+// The licence a report prints and stamps: the reader's profile as the site
+// already knows it (sign-up asks for name, job title, company and industry;
+// the account email is the login). Nothing is typed inside the report.
+export function readerLicence(profile, user, subscriber) {
+  const name = (profile && profile.full_name) || (user && user.user_metadata && user.user_metadata.full_name) || (user && user.email) || "";
+  return {
+    name: name || "Registered reader",
+    title: (profile && profile.role) || "",
+    company: (profile && profile.company) || "",
+    email: (profile && profile.email) || (user && user.email) || "",
+    industry: (profile && profile.industry) || "",
+    tier: (profile && profile.tier) || (subscriber ? "enterprise" : "free"),
+    avatar: (profile && profile.avatar_url) || "",
+    subscriber: !!subscriber,
+    role: [profile && profile.role, profile && profile.company].filter(Boolean).join(" \u00b7 ") || (subscriber ? "Subscriber" : "Free reader"),
+  };
+}
+
+export function prepareReportFrame(frame, { subscriber, onSubscribe, readerName, reportRef, reader } = {}) {
   let doc; try { doc = frame.contentDocument; } catch { return false; }
   if (!doc || !doc.body || !doc.body.children.length) return false;
-  try { frame.contentWindow.__ATTACKED_LICENSE__ = { name: readerName || "Registered reader", role: subscriber ? "Subscriber" : "Free reader" }; } catch { /* noop */ }
+  try {
+    const win = frame.contentWindow;
+    win.__ATTACKED_LICENSE__ = reader ? { ...reader } : { name: readerName || "Registered reader", role: subscriber ? "Subscriber" : "Free reader", subscriber: !!subscriber };
+    try { win.dispatchEvent(new win.Event("attacked-licence")); } catch { /* older frame */ }
+  } catch { /* noop */ }
   // The licensed PDF (v5 shell: the report's "Download now" calls this after its
   // licence gate). A subscriber gets the print edition stamped with the name and
   // role they typed, from /api/report-pdf; a report without a print edition
