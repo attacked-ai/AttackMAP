@@ -18,6 +18,7 @@ import { isSubscriber } from "../lib/taxonomy";
 import { prepareReportFrame } from "../lib/reportLock";
 import { reportHtml } from "../lib/api";
 import { fetchFullReport, fetchReportHtml, listPublishedReports } from "../lib/reports";
+import { listBroadcasts, formatDuration, isAudioFile } from "../lib/broadcasts";
 import { useAuth } from "./AuthProvider";
 import { AuthModal } from "./AuthModal";
 import { SiteNav } from "./SiteNav";
@@ -259,6 +260,19 @@ const HUB_CSS = `
    minus the nav (64px on windows over 500px tall), hence 564px here. */
 @media (orientation:landscape) and (max-height:564px){.hubft .rf-back{top:7px}}
 .hubft .rframe{width:100%;border:none;display:block;height:calc(100vh - var(--nav-h,64px));height:calc(100dvh - var(--nav-h,64px))}
+/* Related broadcast: the episode bar docked at the foot of an open report (src/lib/broadcasts.js). */
+.hubft .rf-bc{position:absolute;left:0;right:0;bottom:0;z-index:21;display:flex;align-items:center;gap:14px;padding:10px 24px;background:rgba(14,17,22,.96);color:#fff;border-top:1px solid #FCBD00;backdrop-filter:blur(6px);font-family:Inter,sans-serif}
+.hubft .rf-bc .k{font:600 10px/1 "JetBrains Mono",ui-monospace,monospace;letter-spacing:.14em;text-transform:uppercase;color:#FCBD00;margin-bottom:4px}
+.hubft .rf-bc .t{font-size:13.5px;font-weight:600;line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.hubft .rf-bc .m{font-size:11px;color:#A6A8AD;margin-top:2px}
+.hubft .rf-bc .w{flex:1;min-width:0}
+.hubft .rf-bc audio{height:36px;width:min(380px,42vw)}
+.hubft .rf-bc a.go{flex:none;background:#FCBD00;color:#0f0f0f;text-decoration:none;border-radius:6px;padding:9px 13px;font:700 11px/1 Inter,sans-serif;letter-spacing:.08em;text-transform:uppercase}
+.hubft .rf-bc .soon{flex:none;font:600 10px/1 "JetBrains Mono",ui-monospace,monospace;letter-spacing:.12em;text-transform:uppercase;color:#0f0f0f;background:#EDEDED;padding:7px 10px;border-radius:4px}
+.hubft .rf-bc .x{flex:none;background:transparent;border:1px solid rgba(255,255,255,.3);color:#fff;border-radius:6px;width:30px;height:30px;cursor:pointer;font-size:14px;line-height:1}
+.hubft .rf-bc .ic{flex:none;width:34px;height:34px;border-radius:8px;background:#FCBD00;display:grid;place-items:center}
+.hubft .rf-bc .ic i{display:block;width:0;height:0;border-left:11px solid #0f0f0f;border-top:7px solid transparent;border-bottom:7px solid transparent;margin-left:3px}
+@media(max-width:640px){.hubft .rf-bc{flex-wrap:wrap;padding:10px 14px;gap:10px}.hubft .rf-bc audio{width:100%;order:9}.hubft .rf-bc .t{white-space:normal}}
 /* Landscape phones: a picture no taller than the screen under the nav.
    width:100% because the hero lead is a flex column, where auto side margins
    would otherwise shrink the frame to nothing. max-width:980px keeps short
@@ -501,6 +515,42 @@ function ArticleView({ article, onBack, onMap, user }) {
   );
 }
 
+// BroadcastBar — the related broadcast (podcast episode) for the open report,
+// docked at the foot of the frame. Nothing is shown when the report has no
+// episode; an episode without an audio file is announced as coming soon; a
+// file plays in place; an episode page (Spotify, YouTube) opens in a new tab.
+// Readers can dismiss it for this report. Data: public.report_broadcasts.
+function BroadcastBar({ reportRef }) {
+  const [eps, setEps] = useState([]);
+  const [hidden, setHidden] = useState(false);
+  useEffect(() => {
+    let dead = false; setEps([]); setHidden(false);
+    // Design review (localhost only — import.meta.env.DEV is false in the live
+    // build): ?bcdemo=1 shows a sample episode for any report.
+    const demo = import.meta.env.DEV && (() => { try { return new URLSearchParams(window.location.search).get("bcdemo"); } catch { return null; } })();
+    const q = demo ? Promise.resolve([{ id: 0, report_ref: reportRef, series: "Attacked.ai Briefing Room", episode: "Episode 1", title: "The Millisecond That Stopped UK Departures", audio_url: demo === "2" ? "https://example.com/episode-1.mp3" : null, page_url: null, duration_sec: demo === "2" ? 1380 : null, show_notes: "The analyst conversation on the NATS outage: the latent defect, who it reached and what to do next.", published: true, published_at: new Date().toISOString() }]) : listBroadcasts(reportRef);
+    q.then((rows) => { if (!dead) setEps(rows); });
+    return () => { dead = true; };
+  }, [reportRef]);
+  const ep = eps[0];
+  if (!ep || hidden) return null;
+  const link = ep.page_url || (ep.audio_url && !isAudioFile(ep.audio_url) ? ep.audio_url : null);
+  const file = ep.audio_url && isAudioFile(ep.audio_url) ? ep.audio_url : null;
+  const meta = [ep.series, ep.episode, formatDuration(ep.duration_sec), ep.published_at ? new Date(ep.published_at).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }) : null].filter(Boolean).join(" · ");
+  return (
+    <div className="rf-bc" role="region" aria-label="Related broadcast">
+      <span className="ic" aria-hidden="true"><i /></span>
+      <div className="w">
+        <div className="k">Related broadcast{eps.length > 1 ? ` · ${eps.length} episodes` : ""}</div>
+        <div className="t" title={ep.title}>{ep.title}</div>
+        <div className="m">{meta}{ep.show_notes ? ` — ${ep.show_notes}` : ""}</div>
+      </div>
+      {file ? <audio controls preload="none" src={file} /> : link ? <a className="go" href={link} target="_blank" rel="noopener">Listen ↗</a> : <span className="soon">Episode coming soon</span>}
+      <button type="button" className="x" aria-label="Hide the broadcast bar" onClick={() => setHidden(true)}>×</button>
+    </div>
+  );
+}
+
 // ReportFrame — when a pre-baked full briefing exists for this incident
 // (public/reports/<id>.html), render that exact report inside the hub via an
 // iframe, with a slim back/CTA bar on top. Faithful to the baked design; no
@@ -566,6 +616,7 @@ function ReportFrame({ article, onBack, onMap, user, subscriber, authReady }) {
         title={article.headline || article.id}
         className="rframe"
       />}
+      <BroadcastBar reportRef={reportRef} />
     </main>
   );
 }
@@ -770,11 +821,14 @@ export function AttackHub() {
     let want = null;
     try { want = new URLSearchParams(window.location.search).get("report"); } catch { /* noop */ }
     if (!want) { didReportOpen.current = true; return; }
-    if (!cmsReports.length) return;                    // wait for the index
-    didReportOpen.current = true;
+    if (!cmsReports.length && !articles.length) return;   // wait for an index
     const row = cmsReports.find(r => r && r.ref === want);
-    if (row) { setSelected(reportArticle(row)); try { window.scrollTo({ top: 0, behavior: "instant" }); } catch { window.scrollTo(0, 0); } }
-  }, [cmsReports]);
+    const baked = row ? null : articles.find(x => x.reportRef === want);   // a baked briefing's ref (the PDF's QR code)
+    const target = row ? reportArticle(row) : baked;
+    if (!target && !(cmsReports.length && articles.length)) return;   // the other index may still name it
+    didReportOpen.current = true;
+    if (target) { setSelected(target); try { window.scrollTo({ top: 0, behavior: "instant" }); } catch { window.scrollTo(0, 0); } }
+  }, [cmsReports, articles]);
 
   const cats = ["ALL", ...Array.from(new Set(articles.map(a => a.primary_category).filter(Boolean)))];
   const inds = ["ALL", ...Array.from(new Set(articles.map(a => a.industry).filter(Boolean))).sort()];

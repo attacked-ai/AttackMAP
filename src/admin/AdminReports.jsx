@@ -16,6 +16,7 @@ import { DEFAULT_BRAND, REPORT_FONTS, REPORT_SECTIONS, applyBrandToHtml, renderR
 import { makeReportPreview, stubPreview } from "../lib/reportPreview";
 import { CATEGORIES, INDUSTRIES } from "../lib/taxonomy";
 import { ReportPageEditor } from "./ReportPageEditor";
+import { AdminBroadcasts } from "./AdminBroadcasts";
 
 const BRAND = { gold: "#FCBD00", obsidian: "#1A1A1A", card: "#242424", deep: "#080808", white: "#FFFFFF", muted: "#A8A8A8", dim: "#585858", border: "#333333" };
 const SEVS = [[5, "Critical"], [4, "High"], [3, "Medium"], [2, "Low"], [1, "Minimal"]];
@@ -206,7 +207,8 @@ export function AdminReports() {
       {err && <div style={{ background: "#3a1a1a", border: "1px solid #FF3B30", padding: "10px 14px", borderRadius: 4, marginBottom: 14, fontSize: 13 }}>{err}</div>}
 
       <div className="adm-rep-grid" style={{ display: "grid", gridTemplateColumns: editing ? "300px 1fr" : "1fr", gap: 18, alignItems: "start" }}>
-        {/* LIST */}
+        {/* LIST, with the broadcasts (podcast episodes) under it */}
+        <div>
         <div style={{ background: BRAND.obsidian, border: `1px solid ${BRAND.border}`, borderRadius: 8, overflow: "hidden" }}>
           {loading ? <div style={{ padding: 40, textAlign: "center", color: BRAND.dim }}>Loading…</div>
             : list.length === 0 ? <div style={{ padding: 40, textAlign: "center", color: BRAND.dim }}>No reports yet. Create the first one.</div>
@@ -220,6 +222,8 @@ export function AdminReports() {
                 <div style={{ fontSize: 11, color: BRAND.muted, marginTop: 4 }}>{[r.industry, r.primary_category, r.severity ? `S${r.severity}` : null, r.incident_id ? `incident #${r.incident_id}` : "standalone"].filter(Boolean).join(" · ")}</div>
               </div>
             ))}
+        </div>
+        <AdminBroadcasts reportRef={editing ? data.ref : ""} />
         </div>
 
         {/* EDITOR */}
