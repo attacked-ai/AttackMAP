@@ -1,0 +1,9 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "functions": {
+    "api/report-pdf.mjs": {
+      "includeFiles": "reports-pdf/**",
+      "maxDuration": 10
+    }
+  }
+}

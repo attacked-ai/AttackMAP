@@ -18,5 +18,7 @@ Thumbs.db
 public/reports/
 public/reports-full/
 public/reports-blur/
+# Print masters (+ .stamp.json) for the licensed PDF endpoint — deployed as files from wt-deploy, never committed
+reports-pdf/
 __pycache__/
 *.pyc

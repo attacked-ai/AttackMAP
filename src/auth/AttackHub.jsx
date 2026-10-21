@@ -595,7 +595,7 @@ function ReportFrame({ article, onBack, onMap, user, subscriber, authReady }) {
   }, [reportRef, subscriber, authReady]);
   useEffect(() => {
     const fr = ref.current; if (!fr) return;
-    const onLoad = () => { prepareReportFrame(fr, { subscriber, onSubscribe: () => { window.location.href = "/?subscribe"; }, readerName: user?.email || "" }); };
+    const onLoad = () => { prepareReportFrame(fr, { subscriber, onSubscribe: () => { window.location.href = "/?subscribe"; }, readerName: user?.email || "", reportRef }); };
     fr.addEventListener("load", onLoad);
     if (fr.contentDocument?.readyState === "complete" && fr.contentDocument.body?.children.length) onLoad();
     return () => fr.removeEventListener("load", onLoad);

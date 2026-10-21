@@ -37,8 +37,11 @@ export function canonicalPath(raw) {
 //   { action: "serve", file, exact }   subscriber — serve /reports-full/<file>
 //   { action: "deny", file }           a token that is not a subscriber's
 //   { action: "preview", file }        no token — send to /reports/<file>
+export const PDF_PREFIX = "/reports-pdf/";   // the print masters: never served as files, only through /api/report-pdf
+
 export async function decide(rawPath, authHeader, opts) {
   const p = canonicalPath(rawPath);
+  if (p.toLowerCase().startsWith(PDF_PREFIX)) return { action: "404" };
   if (!p.toLowerCase().startsWith(FULL_PREFIX)) return { action: "pass" };
   const file = p.slice(FULL_PREFIX.length);
   if (!REPORT_FILE.test(file)) return { action: "404" };
@@ -52,6 +55,10 @@ export function bearerToken(header) {
   const m = /^Bearer\s+([A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)\s*$/.exec(String(header || ""));
   return m ? m[1] : null;
 }
+
+// The token's payload (sub, email, exp, …), unverified: for identity in logs and
+// stamps only, after PostgREST has accepted the token.
+export function tokenClaims(token) { return claims(token); }
 
 function claims(token) {
   try {

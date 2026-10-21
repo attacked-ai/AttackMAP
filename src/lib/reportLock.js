@@ -30,6 +30,33 @@ const LOCK_CSS = `
   .dash-lock button{flex:none;white-space:nowrap;background:#FCBD00;color:#0f0f0f;border:0;border-radius:7px;padding:8px 12px;font:700 11px/1 Inter,system-ui,sans-serif;letter-spacing:.08em;text-transform:uppercase;cursor:pointer}
   @media (max-width:640px){.dash-lock{white-space:normal;flex-direction:column;text-align:center}}`;
 
+// POST /api/report-pdf with the reader's access token → the stamped PDF as a
+// file download. Resolves when the download starts; rejects when the server
+// says no (the caller then prints instead).
+export async function downloadLicensedPdf(frame, reportRef, lic) {
+  // loaded here, not at the top: this file is also read by the Node build
+  // scripts (apply-report-responsive.mjs), which must not pull in Supabase
+  const { supabase } = await import("./supabaseClient.js");
+  const { data } = await supabase.auth.getSession();
+  const token = data?.session?.access_token;
+  if (!token) throw new Error("sign_in");
+  const name = (lic && lic.name) || "", role = (lic && lic.role) || "";
+  const r = await fetch("/api/report-pdf", {
+    method: "POST", cache: "no-store",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ ref: reportRef, name, role }),
+  });
+  if (!r.ok) throw new Error(String(r.status));
+  const blob = await r.blob();
+  const win = frame.ownerDocument.defaultView;
+  const url = win.URL.createObjectURL(blob);
+  const a = frame.ownerDocument.createElement("a");
+  a.href = url; a.download = `${reportRef}.pdf`; a.rel = "noopener";
+  frame.ownerDocument.body.appendChild(a); a.click(); a.remove();
+  win.setTimeout(() => win.URL.revokeObjectURL(url), 60_000);
+  return r.headers.get("x-licence-id") || "";
+}
+
 export function lockReportForFreeReader(doc, onSubscribe) {
   if (!doc || !doc.body) return 0;
   // a preview (either design) is already cut down on the server side
@@ -153,10 +180,15 @@ function addMobileNav(doc) {
 
 // Stamp the licence line the report prints, hide any in-report navigation the
 // host page owns, and gate the subscriber sections for free readers.
-export function prepareReportFrame(frame, { subscriber, onSubscribe, readerName } = {}) {
+export function prepareReportFrame(frame, { subscriber, onSubscribe, readerName, reportRef } = {}) {
   let doc; try { doc = frame.contentDocument; } catch { return false; }
   if (!doc || !doc.body || !doc.body.children.length) return false;
   try { frame.contentWindow.__ATTACKED_LICENSE__ = { name: readerName || "Registered reader", role: subscriber ? "Subscriber" : "Free reader" }; } catch { /* noop */ }
+  // The licensed PDF (v5 shell: the report's "Download now" calls this after its
+  // licence gate). A subscriber gets the print edition stamped with the name and
+  // role they typed, from /api/report-pdf; a report without a print edition
+  // (404) falls back to the frame's own print dialog.
+  try { frame.contentWindow.__ATTACKED_PDF_DOWNLOAD__ = subscriber && reportRef ? (lic) => downloadLicensedPdf(frame, reportRef, lic) : undefined; } catch { /* noop */ }
   // .r-bar-back: the frame's own "← Back" sits under the host's back button
   // (Hub, dashboard) at <=1080px; the host owns navigation, so hide it.
   doc.querySelectorAll('a[href*="?hub"], .r-back, .r-bar-back').forEach((el) => { el.style.display = "none"; });

@@ -117,8 +117,26 @@ const stripCites = (v) => typeof v === "string" ? v.replace(/\s*\[S\d+\]/g, "")
   : Array.isArray(v) ? v.map(stripCites)
   : (v && typeof v === "object") ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, stripCites(x)])) : v;
 
+// A v5 editorial shell (21 Oct 2026: broadcast card after the summary, an
+// Attack Map band, the licensed-download gate, a multi-branch downloadPDF)
+// → the v4 lines the cuts below expect. The podcast card stays in the preview
+// (it sits inside the summary); the band and the gate are built after the
+// summary and go with the rest of the cut. The embedded PDF cover is dropped.
+function normaliseV5(src) {
+  if (!src.includes("['dl','Licensed PDF']")) return src;
+  let s = src
+    .replace(",['src','Sources'],['dl','Licensed PDF']];", ",['src','Sources']];")
+    .replace("return cover+toc+[summary,quote,chain,severity,fcam,comparables,frameworks,blast,peer,ctaMap,control,vend,outlook,scen,verdict,board,sources,dl].join('')+end;",
+      "return cover+toc+[summary,quote,chain,severity,fcam,comparables,frameworks,blast,peer,control,vend,outlook,scen,verdict,board,sources].join('')+end;")
+    .replace("$('readerPrint').addEventListener('click',goDownload);", "$('readerPrint').addEventListener('click',downloadPDF);")
+    .replace(/^const PDFCOVER = "[^"\n]*";$/m, 'const PDFCOVER = "";');
+  const a = s.indexOf("function downloadPDF(){"), b = s.indexOf("\n}\n", a);
+  if (a >= 0 && b > a) s = s.slice(0, a) + "function downloadPDF(){\n  if(window.__ATTACKED_PDF_URL__){ window.location.href=window.__ATTACKED_PDF_URL__; return; }\n  window.print();\n}" + s.slice(b + 2);
+  return s;
+}
+
 function editorialPreview(src) {
-  const e = editor(src);
+  const e = editor(normaliseV5(src));
   const mI = e.line("INCIDENT"), mM = e.line("MEDIA"), mG = e.line("GEO");
   const I = JSON.parse(mI[1]), M = JSON.parse(mM[1]);
   let w = 0;

@@ -295,7 +295,7 @@ function ReportFrame({ i, reportRef, subscriber, onSubscribe, readerName }) {
   }, [reportRef, doc]);
   useEffect(() => {
     const fr = ref.current; if (!fr) return;
-    const onLoad = () => { prepareReportFrame(fr, { subscriber, onSubscribe, readerName }); };
+    const onLoad = () => { prepareReportFrame(fr, { subscriber, onSubscribe, readerName, reportRef }); };
     fr.addEventListener("load", onLoad);
     if (fr.contentDocument?.readyState === "complete" && fr.contentDocument.body?.children.length) onLoad();
     return () => { fr.removeEventListener("load", onLoad); };

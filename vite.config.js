@@ -1,6 +1,7 @@
 import { defineConfig, loadEnv } from "vite";
 import react from "@vitejs/plugin-react";
 import { FULL_PREFIX, PREVIEW_PREFIX, decide } from "./src/lib/reportGate.js";
+import reportPdf from "./api/report-pdf.mjs";
 
 // The subscriber gate for /reports-full/ on the dev and preview servers — the
 // same decision middleware.js makes on Vercel, so localhost shows exactly
@@ -16,10 +17,12 @@ function reportGate(env) {
     if (d.action === "deny") { res.statusCode = 403; res.setHeader("content-type", "application/json"); return res.end('{"error":"subscribers_only"}'); }
     res.statusCode = 404; res.end("Not found");
   };
+  // The licensed PDF endpoint, the same handler Vercel runs (api/report-pdf.mjs).
+  const pdf = (req, res, next) => (String(req.url || "").split("?")[0] === "/api/report-pdf" ? reportPdf(req, res) : next());
   return {
     name: "attacked-report-gate",
-    configureServer(server) { server.middlewares.use(gate); },
-    configurePreviewServer(server) { server.middlewares.use(gate); },
+    configureServer(server) { server.middlewares.use(pdf); server.middlewares.use(gate); },
+    configurePreviewServer(server) { server.middlewares.use(pdf); server.middlewares.use(gate); },
   };
 }
 
