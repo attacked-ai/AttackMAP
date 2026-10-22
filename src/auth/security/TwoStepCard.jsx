@@ -53,7 +53,7 @@ export function TwoStepCard({
       <div className="sec-grid" style={grid}>
         {/* Row A — Passkey (first, like MongoDB's Security Key/Biometric) */}
         <MethodRow icon="fingerprint" name="Passkey"
-          info={<button type="button" aria-label="About passkeys" aria-expanded={passkeyInfo} aria-controls="passkey-note" style={infoBtn(passkeyInfo)} onClick={onTogglePasskeyInfo}><Icon name="info" /></button>}
+          info={<button type="button" className="sec-info" aria-label="About passkeys" aria-expanded={passkeyInfo} aria-controls="passkey-note" style={infoBtn(passkeyInfo)} onClick={onTogglePasskeyInfo}><Icon name="info" /></button>}
           pillEl={status ? (method === "Passkey" ? <span style={pill(true)}>Used last time</span> : <span style={recPill}>Recommended</span>) : null}
           text={loading ? "Checking…" : "Your fingerprint, face, phone or security key. Can't be phished, and it covers both steps on its own."}
           action={!loading && act("sec-passkey-btn", false, !!busy || bridgeOff, onTogglePasskey, step === "passkeyHelp" ? "Close" : "Set up")}

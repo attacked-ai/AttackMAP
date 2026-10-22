@@ -12,6 +12,9 @@ const PATHS = {
   clock: <><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></>,
   devices: <><rect x="3" y="5" width="13" height="10" rx="1.5" /><path d="M6.5 19h6" /><rect x="17.5" y="9" width="4" height="10" rx="1" /></>,
   phone: <><rect x="7" y="2.5" width="10" height="19" rx="2" /><path d="M11 18h2" /></>,
+  // The devices list: a laptop for Mac / Windows / Linux / Chrome OS rows, a tablet for iPad (phone above for iPhone / Android).
+  laptop: <><rect x="4" y="5" width="16" height="11" rx="1.5" /><path d="M2 19h20" /></>,
+  tablet: <><rect x="4.5" y="2.5" width="15" height="19" rx="2" /><path d="M11 18.5h2" /></>,
   fingerprint: <><path d="M5 10.5a7 7 0 0 1 14 0" /><path d="M7.5 12a4.5 4.5 0 0 1 9 0c0 3-.6 5.6-1.6 8" /><path d="M12 12v1.5c0 2.8-.6 5.2-1.7 7.5" /><path d="M9.6 15.5c-.2 1.8-.7 3.4-1.4 4.9" /></>,
   check: <path d="M5 12.5l4.5 4.5L19 7.5" />,
   info: <><circle cx="12" cy="12" r="9" /><path d="M12 11v5M12 8h.01" /></>,

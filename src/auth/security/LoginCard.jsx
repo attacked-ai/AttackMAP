@@ -3,13 +3,15 @@
 //
 // Rows: Email address (read-only) · Password (set or change, in-page form) ·
 // Linked accounts (read-only: WorkOS has no unlink) · Last sign-in ·
-// Signed-in devices (Supabase "sign out everywhere else"). All state and
-// handlers live in SecurityPanel.jsx; this file only renders.
+// Signed-in devices (one row per device from the bridge, "Sign out" on every
+// other one, then Supabase's "sign out everywhere else"; the plain row stays
+// while the bridge has no devices route). All state and handlers live in
+// SecurityPanel.jsx; this file only renders.
 // ─────────────────────────────────────────────────────────────────────────
 import React from "react";
 import {
   C, card, h3, p, btn, pill, helper, rowLabel, readBox, subRow, field, focusGold, blurLine, linkBtn,
-  codeInput, fmtDateTime, METHOD, providerName, isOAuth,
+  codeInput, fmtDate, fmtDateTime, fmtAgo, deviceName, deviceIcon, METHOD, providerName, isOAuth,
 } from "./tokens";
 import { IconTile, ProviderMark } from "./icons";
 
@@ -17,12 +19,16 @@ const rowText = { fontSize: 13.5, lineHeight: 1.6, color: C.ink2 };
 const rowWrap = { display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap", padding: "14px 0", borderTop: `1px solid ${C.line}` };
 
 // A row: icon tile · label + text block · right-aligned action (full width on phones).
-export function Row({ icon, label, children, action }) {
+// labelId: the label can take focus (a list heading to land on after a row goes).
+// top: the tile sits by the label, not centred on the whole block (rows that hold a list).
+export function Row({ icon, label, labelId, top = false, children, action }) {
   return (
-    <div className="sec-row" style={rowWrap}>
+    <div className="sec-row" style={top ? { ...rowWrap, alignItems: "flex-start" } : rowWrap}>
       {icon && <IconTile name={icon} />}
       <div style={{ flex: "1 1 220px", minWidth: 0 }}>
-        <div style={rowLabel}>{label}</div>
+        {labelId
+          ? <div id={labelId} tabIndex={-1} style={{ ...rowLabel, outline: "none" }}>{label}</div>
+          : <div style={rowLabel}>{label}</div>}
         <div style={rowText}>{children}</div>
       </div>
       {action}
@@ -90,6 +96,76 @@ export function LinkedList({ status, retry, onRetry }) {
   </>);
 }
 
+// Signed-in devices = the reader's own sessions (GET /security/devices), one
+// row each as the bridge names them ("Mac · Safari"), this one first and
+// marked, every other one with its own "Sign out" (POST /security/devices/
+// signout). The page never shows an address or the raw browser text. `lock`:
+// "Sign out everywhere else" is running, so the row buttons wait for it.
+const smallBtn = (primary, disabled) => ({ ...btn(primary, disabled), padding: "6px 10px", fontSize: 10.5 });
+export function DevicesList({ devices, now, lock, onSignOut, onRetry, onSignInAgain }) {
+  const { list, err, busyId, msg } = devices;
+  // Always mounted, so the live region exists before the text arrives.
+  const statusLine = (
+    <div role="status" aria-live="polite" style={{ marginTop: msg ? 8 : 0, fontSize: 13, fontWeight: 600, color: msg && msg.ok ? C.ok : C.err }}>
+      {msg ? msg.text : ""}
+      {msg && !msg.ok && msg.reauth && <div style={{ marginTop: 8 }}><button type="button" style={btn(true)} onClick={onSignInAgain}>Sign in again</button></div>}
+    </div>
+  );
+  if (err) {
+    return (<>
+      <div style={{ color: C.goldDeep, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginTop: 6 }}>
+        <span>{err.reauth ? err.text : "We couldn't list your devices just now."}</span>
+        {err.reauth
+          ? <button type="button" style={smallBtn(true)} onClick={onSignInAgain}>Sign in again</button>
+          : <button type="button" style={smallBtn(false)} onClick={onRetry}>Try again</button>}
+      </div>
+      {statusLine}
+    </>);
+  }
+  if (!list) return (<><div style={{ marginTop: 6 }}>Checking…</div>{statusLine}</>);
+  return (<>
+    <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 8 }}>
+      {list.map((d) => {
+        const name = deviceName(d);
+        // For a screen reader: "Sign out Windows Chrome", no middle dot to announce.
+        const spoken = (d.os || "Unknown device") + (d.browser && d.browser !== "Browser" ? ` ${d.browser}` : "");
+        const ago = fmtAgo(d.last_active, now);
+        const since = d.signed_in ? fmtDate(d.signed_in) : "";
+        const busy = busyId === d.id;
+        return (
+          <div key={d.id} className="sec-row" style={subRow}>
+            {/* tile and text stay together on one line; on phones only the button drops below */}
+            <div style={{ display: "flex", gap: 12, alignItems: "center", flex: "1 1 180px", minWidth: 0 }}>
+              <IconTile name={deviceIcon(d.os)} />
+              <div style={{ flex: "1 1 auto", minWidth: 0 }}>
+                <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                  <span style={{ fontSize: 13.5, fontWeight: 600, color: C.ink }}>{name}</span>
+                  {d.current && <span style={pill(true)}>This device</span>}
+                </div>
+                {(ago || since) && (
+                  <div style={{ fontSize: 12, color: C.ink3, marginTop: 2 }}>
+                    {ago ? `Last active ${ago}` : ""}{ago && since ? " · " : ""}{since ? `Signed in ${since}` : ""}
+                  </div>
+                )}
+              </div>
+            </div>
+            {!d.current && (
+              <button type="button" id={`sec-dev-${d.id}`} className="sec-act" aria-label={busy ? `Signing out ${spoken}` : `Sign out ${spoken}`} disabled={!!busyId || lock}
+                onClick={() => onSignOut(d.id)}
+                style={{ ...btn(false, !!busyId || lock), padding: "8px 12px", fontSize: 11, marginLeft: "auto", flex: "0 0 auto" }}>
+                {busy ? "Signing out…" : "Sign out"}
+              </button>
+            )}
+          </div>
+        );
+      })}
+    </div>
+    {list.length === 1 && <div style={{ ...helper, marginTop: 8 }}>No other browser or phone is signed in.</div>}
+    {list.length === 0 && <div style={{ ...helper, marginTop: 8 }}>We couldn't tell which devices are signed in.</div>}
+    {statusLine}
+  </>);
+}
+
 // The in-page "Set or change your password" form (POST /security/password).
 export function PasswordForm({ form, setForm, needsCode, busy, msg, headingRef, onSave, onCancel, onSignInAgain }) {
   const { a, b, code, show } = form;
@@ -146,8 +222,9 @@ export function PasswordForm({ form, setForm, needsCode, busy, msg, headingRef, 
 
 export function LoginCard({
   user, status, loading, noWorkos, v8, hasPassword, on, bridgeOff, disabledTitle, busy, step,
-  pwForm, setPwForm, pwMsg, pwHeadingRef, retry, others,
+  pwForm, setPwForm, pwMsg, pwHeadingRef, retry, others, devices, now,
   onOpenPassword, onSavePassword, onCancel, onRetry, onOthers, onOthersConfirm, onOthersCancel, onOthersNow, onSignInAgain,
+  onDeviceSignOut, onDevicesRetry,
 }) {
   const email = (user && user.email) || "";
   const method = status ? status.method : null;
@@ -155,6 +232,24 @@ export function LoginCard({
   const othersMsg = others === "done" ? "Done. Other devices are signed out; this one stays signed in."
     : others === "error" ? "Couldn't reach the sign-in server. Try again in a minute." : "";
   const pwSaved = !!(pwMsg && pwMsg.ok && step !== "password");
+  // Only this device in the list: nothing else to sign out, so the button goes.
+  // It also stays away while the list refreshes right after "Sign out
+  // everywhere else" has finished (no flash of the button under "Checking…").
+  const showOthers = !(devices.list && devices.list.length === 1) && !(devices.list === null && !devices.err && others === "done");
+  // A row's own Sign out is in flight: "Sign out everywhere else" waits for it.
+  const othersLocked = others === "busy" || !!devices.busyId;
+  // The "Sign out everywhere else" confirm, progress and result (both layouts).
+  const othersFlow = (<>
+    {others === "confirm" && (
+      <div style={{ marginTop: 10, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+        <span style={{ flex: "1 1 220px" }}>This signs out every other browser and phone within the hour. This one stays signed in.</span>
+        <button type="button" style={btn(true, othersLocked)} disabled={othersLocked} onClick={onOthersConfirm}>Sign out others</button>
+        <button type="button" style={btn(false)} onClick={onOthersCancel}>Cancel</button>
+      </div>
+    )}
+    {others === "busy" && <div style={{ marginTop: 6, fontSize: 13, fontWeight: 600, color: C.ink3 }}>Signing out…</div>}
+    <div role="status" aria-live="polite" style={{ marginTop: othersMsg ? 6 : 0, fontSize: 13, fontWeight: 600, color: others === "done" ? C.ok : C.err }}>{othersMsg}</div>
+  </>);
 
   return (
     <div style={card}>
@@ -197,7 +292,7 @@ export function LoginCard({
           <div role="status" aria-live="polite" style={{ marginTop: pwSaved ? 6 : 0, fontSize: 13, fontWeight: 600, color: C.ok }}>
             {pwSaved && (<>
               {pwMsg.text}{" "}
-              <button type="button" style={{ ...linkBtn, ...(others === "busy" ? { opacity: 0.6, cursor: "wait" } : {}) }} disabled={others === "busy"} onClick={onOthersNow}>
+              <button type="button" style={{ ...linkBtn, ...(othersLocked ? { opacity: 0.6, cursor: "wait" } : {}) }} disabled={othersLocked} onClick={onOthersNow}>
                 Think someone else knew the old one? Sign out everywhere else.
               </button>
             </>)}
@@ -211,7 +306,7 @@ export function LoginCard({
 
       {/* Linked accounts */}
       {(loading || full) && (
-        <Row icon="link" label="Linked accounts">
+        <Row icon="link" label="Linked accounts" top>
           {loading ? "Checking…" : <LinkedList status={status} retry={retry} onRetry={onRetry} />}
         </Row>
       )}
@@ -223,25 +318,33 @@ export function LoginCard({
             <div style={{ fontSize: 13, fontWeight: 600, color: C.ink }}>
               With {METHOD[method] || providerName(method)}{status.signed_in_at && fmtDateTime(status.signed_in_at) ? ` · ${fmtDateTime(status.signed_in_at)}` : ""}
             </div>
-            <div style={helper}>Any device. Doesn't look right? Sign out everywhere else and turn on two-step verification.</div>
+            <div style={helper}>Any device. Doesn't look right? {devices.na ? "Sign out everywhere else" : "Check your signed-in devices below"} and turn on two-step verification.</div>
           </>)}
         </Row>
       )}
 
-      {/* Signed-in devices — Supabase only, works without the bridge */}
-      <Row icon="devices" label="Signed-in devices"
-        action={others !== "confirm" && others !== "busy" && <ActBtn onClick={onOthers}>Sign out everywhere else</ActBtn>}>
-        This one, plus any other browser or phone where you signed in.
-        {others === "confirm" && (
-          <div style={{ marginTop: 10, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-            <span style={{ flex: "1 1 220px" }}>This signs out every other browser and phone within the hour. This one stays signed in.</span>
-            <button type="button" style={btn(true)} onClick={onOthersConfirm}>Sign out others</button>
-            <button type="button" style={btn(false)} onClick={onOthersCancel}>Cancel</button>
-          </div>
-        )}
-        {others === "busy" && <div style={{ marginTop: 6, fontSize: 13, fontWeight: 600, color: C.ink3 }}>Signing out…</div>}
-        <div role="status" aria-live="polite" style={{ marginTop: othersMsg ? 6 : 0, fontSize: 13, fontWeight: 600, color: others === "done" ? C.ok : C.err }}>{othersMsg}</div>
-      </Row>
+      {/* Signed-in devices. devices.na = the bridge has no devices route yet (or
+          could not be asked): the plain Supabase-only row, exactly as before.
+          Otherwise one row per device, then "Sign out everywhere else" at the
+          bottom (left out once the list shows only this device). */}
+      {devices.na ? (
+        <Row icon="devices" label="Signed-in devices"
+          action={others !== "confirm" && others !== "busy" && <ActBtn onClick={onOthers}>Sign out everywhere else</ActBtn>}>
+          This one, plus any other browser or phone where you signed in.
+          {othersFlow}
+        </Row>
+      ) : (
+        <Row icon="devices" label="Signed-in devices" labelId="sec-dev-h" top>
+          <div style={helper}>Every browser and phone where you are signed in.</div>
+          <DevicesList devices={devices} now={now} lock={others === "busy"} onSignOut={onDeviceSignOut} onRetry={onDevicesRetry} onSignInAgain={onSignInAgain} />
+          {showOthers && others !== "confirm" && others !== "busy" && (
+            <div className="r-btnrow" style={{ display: "flex", justifyContent: "flex-end", marginTop: 12 }}>
+              <button type="button" id="sec-others-btn" style={btn(false)} onClick={onOthers}>Sign out everywhere else</button>
+            </div>
+          )}
+          {othersFlow}
+        </Row>
+      )}
     </div>
   );
 }

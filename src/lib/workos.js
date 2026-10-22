@@ -174,8 +174,16 @@ export function clearPending() {
 //   "/totp/start" {}, "/totp/confirm" {setup, code}, "/totp/remove" {code}
 //   "/password" {password, code?}   set or change the WorkOS password; code
 //                      only when two-step is on (bridge v8 and later)
+//   "/devices"         the reader's signed-in devices (their Supabase sessions,
+//                      named by the bridge: "Mac · Safari"), for the Signed-in
+//                      devices list; "/devices/signout" {id} ends one of them.
+//                      Neither needs a recent sign-in. An older bridge answers
+//                      404 / 405 and the page keeps its plain row. More than
+//                      60 calls a minute: 429 "slow_down".
 // Errors carry the bridge's code ("reauth": sign in again first; "no_workos";
-// "state_changed"; "weak_password"; "code_required").
+// "state_changed"; "weak_password"; "code_required"; "not_found" and
+// "current" for /devices/signout; "slow_down") and the HTTP status, so a page
+// can tell a route the bridge does not have yet (404 / 405) from a failure.
 export async function securityApi(path = "", body = null) {
   const { supabase } = await import("./supabaseClient");
   const { data } = await supabase.auth.getSession();
@@ -193,6 +201,6 @@ export async function securityApi(path = "", body = null) {
     throw new Error("Security settings can't be reached right now. Check your connection and try again.");
   }
   const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw Object.assign(new Error(j.error || "Security settings are unavailable right now. Try again in a minute."), { code: j.code || null });
+  if (!r.ok) throw Object.assign(new Error(j.error || "Security settings are unavailable right now. Try again in a minute."), { code: j.code || null, status: r.status });
   return j;
 }

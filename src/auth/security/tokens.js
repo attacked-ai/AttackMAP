@@ -53,6 +53,35 @@ export const fmtDateTime = (iso) => {
     return d.toLocaleString("en-GB", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
   } catch { return ""; }
 };
+// Relative time in plain words, for "Last active …" on the devices list:
+// just now · N minute(s) ago · N hour(s) ago · yesterday · N days ago, then
+// the date (fmtDate) from a week on. Units are whole and never read "0 hours"
+// or "1 days"; a time in the future (another device's clock) is "just now".
+export const fmtAgo = (iso, now = Date.now()) => {
+  try {
+    if (iso == null || iso === "") return "";   // new Date(null) is 1970, not invalid
+    const t = new Date(iso).getTime();
+    if (Number.isNaN(t)) return "";
+    const s = Math.max(0, Math.floor((now - t) / 1000));
+    const ago = (n, unit) => `${n} ${unit}${n === 1 ? "" : "s"} ago`;
+    if (s < 60) return "just now";
+    if (s < 3600) return ago(Math.floor(s / 60), "minute");
+    if (s < 86400) return ago(Math.floor(s / 3600), "hour");
+    const days = Math.floor(s / 86400);
+    if (days === 1) return "yesterday";
+    if (days < 7) return ago(days, "day");
+    return fmtDate(iso);
+  } catch { return ""; }
+};
+// A device row, from what the bridge read off the browser's own description
+// (the page never sees the raw text or the address): "Mac · Safari"; the
+// generic "Browser" is left off. Phones get the phone glyph, iPads the tablet.
+export const deviceName = (d) => {
+  const os = (d && d.os) || "Unknown device";
+  const b = d && d.browser;
+  return b && b !== "Browser" ? `${os} · ${b}` : os;
+};
+export const deviceIcon = (os) => (os === "iPhone" || os === "Android" ? "phone" : os === "iPad" ? "tablet" : "laptop");
 // How the last sign-in was made (the bridge's auth_method), in plain words.
 export const METHOD = {
   Passkey: "a passkey", Password: "your password", MagicAuth: "an email code",

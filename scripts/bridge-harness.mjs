@@ -22,8 +22,11 @@ const wosUsers = new Map();      // id -> { id, email, email_verified }
 const factors = new Map();       // factor id -> { id, user_id, secret, created_at }
 const challenges = new Map();    // challenge id -> factor id
 const attempts = new Map();      // user id -> { n, start }
+const sessions = new Map();      // auth.sessions: id -> { id, user_id, user_agent, ip, created_at, updated_at, refreshed_at, not_after }
+const refreshTokens = [];        // auth.refresh_tokens: { token, session_id, user_id }
+const tokenSession = new Map();  // access token -> session id (the JWT's session_id claim)
 const calls = [];
-let fail = {};                   // switches: { gotrue, gotrue500, challenge, verifyInvalid, adminPut, slowPut, resetPut, rpc, factors, relistAt, identities, put, put429, delete }
+let fail = {};                   // switches: { gotrue, gotrue500, gotrueLoose (an auth server that does not check the token's session row), challenge, verifyInvalid, adminPut, slowPut, resetPut, rpc, sessions (true = 500, or a status), factors, relistAt, identities, put, put429, delete }
 let nextId = 1;
 const id = (p) => `${p}_${String(nextId++).padStart(4, "0")}`;
 
@@ -35,7 +38,20 @@ const jwt = (payload) => `${b64u({ alg: "HS256" })}.${b64u(payload)}.sig`;
 const res = (status, body, headers = {}) => new Response(body === undefined ? null : JSON.stringify(body), { status, headers: { "content-type": "application/json", ...headers } });
 
 function addSbUser(email, extra = {}) { const u = { id: crypto.randomUUID(), email, email_confirmed_at: "2026-10-01T00:00:00Z", app_metadata: { provider: "email", providers: ["email"] }, user_metadata: {}, ...extra }; sbUsers.set(u.id, u); return u; }
-function session(user, amr) { const t = jwt({ sub: user.id, amr }); tokens.set(t, user.id); return t; }
+// A Supabase session for this user, as GoTrue makes one: a row in auth.sessions
+// (+ one refresh token) and an access token whose JWT carries session_id.
+// o: { ua, ip, created, updated, refreshed, notAfter } (ISO strings; ua may be null).
+const UA_DEFAULT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15";
+function session(user, amr, o = {}) {
+  const created = o.created ?? new Date().toISOString();
+  const s = { id: crypto.randomUUID(), user_id: user.id, user_agent: "ua" in o ? o.ua : UA_DEFAULT, ip: o.ip ?? "203.0.113.7",
+              created_at: created, updated_at: o.updated ?? created, refreshed_at: o.refreshed ?? null, not_after: o.notAfter ?? null };
+  sessions.set(s.id, s);
+  refreshTokens.push({ token: "rt_" + s.id.slice(0, 8), session_id: s.id, user_id: user.id });
+  const t = jwt({ sub: user.id, amr, session_id: s.id }); tokens.set(t, user.id); tokenSession.set(t, s.id); return t;
+}
+const sidOf = (token) => tokenSession.get(token);
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 globalThis.fetch = async (input, init = {}) => {
   const url = new URL(typeof input === "string" ? input : input.url);
@@ -47,8 +63,15 @@ globalThis.fetch = async (input, init = {}) => {
     if (url.pathname === "/auth/v1/user") {
       if (fail.gotrue) throw new TypeError("network down");
       if (fail.gotrue500) return res(500, { msg: "boom" });
-      const uid = tokens.get(auth.replace(/^Bearer /, ""));
-      return uid ? res(200, sbUsers.get(uid)) : res(401, { msg: "bad jwt" });
+      const tok = auth.replace(/^Bearer /, "");
+      const uid = tokens.get(tok);
+      if (!uid) return res(401, { msg: "bad jwt" });
+      // GoTrue loads the auth.sessions row named by the token's session_id claim
+      // on every authenticated call and refuses the token once that row is gone
+      // (ended from another device), however long the token itself still runs.
+      const sid = tokenSession.get(tok);
+      if (sid && !sessions.has(sid) && !fail.gotrueLoose) return res(403, { code: 403, error_code: "session_not_found", msg: "Session from session_id claim in JWT does not exist" });
+      return res(200, sbUsers.get(uid));
     }
     if (auth !== `Bearer ${ENV.SUPABASE_SERVICE_ROLE_KEY}`) return res(401, { msg: "not service role" });
     if (url.pathname === "/auth/v1/admin/users" && method === "POST") {
@@ -79,6 +102,26 @@ globalThis.fetch = async (input, init = {}) => {
       const a = attempts.get(p_user);
       if (!a || a.start < Date.now() - 600000) { attempts.set(p_user, { n: 1, start: Date.now() }); return res(200, 1); }
       a.n++; return res(200, a.n);
+    }
+    // supabase/migrations/20261022_sessions.sql: the two service-role-only SQL functions
+    if (url.pathname === "/rest/v1/rpc/_sessions_for") {
+      if (fail.sessions) return res(fail.sessions === true ? 500 : fail.sessions, { code: fail.sessions === 404 ? "PGRST202" : "XX000" });
+      world.sessionLists = (world.sessionLists || 0) + 1;
+      const latest = (...ts) => ts.filter(Boolean).sort((a, b) => Date.parse(b) - Date.parse(a))[0];   // greatest(), nulls skipped
+      const rows = [...sessions.values()].filter((s) => s.user_id === body.p_user && (!s.not_after || Date.parse(s.not_after) > Date.now()))
+        .map((s) => ({ id: s.id, created_at: s.created_at, last_active: latest(s.updated_at, s.refreshed_at, s.created_at), user_agent: s.user_agent, ip: s.ip }))
+        .sort((a, b) => Date.parse(b.last_active) - Date.parse(a.last_active)).slice(0, 50);
+      return res(200, rows);
+    }
+    if (url.pathname === "/rest/v1/rpc/_end_session") {
+      if (fail.sessions) return res(fail.sessions === true ? 500 : fail.sessions, { code: fail.sessions === 404 ? "PGRST202" : "XX000" });
+      world.sessionEnds.push(body);
+      if (!UUID_RE.test(String(body.p_session)) || !UUID_RE.test(String(body.p_user))) return res(400, { code: "22P02", message: "invalid input syntax for type uuid" });   // what PostgREST says for a non-uuid argument
+      const s = sessions.get(String(body.p_session).toLowerCase());
+      if (!s || s.user_id !== body.p_user) return res(200, 0);
+      for (let i = refreshTokens.length - 1; i >= 0; i--) if (refreshTokens[i].session_id === s.id) refreshTokens.splice(i, 1);
+      sessions.delete(s.id);
+      return res(200, 1);
     }
     return res(404, { msg: "no such sb route " + url.pathname });
   }
@@ -156,7 +199,7 @@ globalThis.fetch = async (input, init = {}) => {
   }
   throw new Error("unexpected fetch " + url);
 };
-const world = { signInAs: null, method: "Password", enrolled: [], magic: [], renamed: [], passwordPuts: [], verifies: [], identityGets: 0, identityWrap: false };
+const world = { signInAs: null, method: "Password", enrolled: [], magic: [], renamed: [], passwordPuts: [], verifies: [], identityGets: 0, identityWrap: false, sessionEnds: [] };
 
 // ── load the real bridge ──
 let handler;
@@ -182,8 +225,8 @@ await loadBridge();
 const BASE = `${SB}/functions/v1/workos-auth`;
 const SITE = "https://attackedmap.vercel.app";
 const PREVIEW = "https://attackedmap-evil-mohiawrai2609s-projects.vercel.app";
-const call = (path, { method = "GET", origin = SITE, token, body, cookie } = {}) => handler(new Request(BASE + path, {
-  method, headers: { ...(origin ? { origin } : {}), ...(token ? { authorization: `Bearer ${token}` } : {}), ...(body ? { "content-type": "application/json" } : {}), ...(cookie ? { cookie } : {}) },
+const call = (path, { method = "GET", origin = SITE, token, body, cookie, ua } = {}) => handler(new Request(BASE + path, {
+  method, headers: { ...(origin ? { origin } : {}), ...(token ? { authorization: `Bearer ${token}` } : {}), ...(body ? { "content-type": "application/json" } : {}), ...(cookie ? { cookie } : {}), ...(ua ? { "user-agent": ua } : {}) },
   ...(body ? { body: JSON.stringify(body) } : {}), redirect: "manual",
 }));
 let fails = 0, passes = 0;
@@ -755,6 +798,172 @@ globalThis.__smtpHang = false;
   for (const k of Object.keys(orig)) console[k] = orig[k];
   const leaked = Object.values(PW).filter((p) => out.some((l) => l.includes(p)) || bodies.some((b) => b.includes(p)));
   check("PW-12: no password ever appears in the bridge's console output or any response body", leaked.length === 0, leaked.length + " leaked");
+}
+
+// ── 10. Signed-in devices: GET /security/devices, POST /security/devices/signout ──
+{
+  await loadBridge();
+  const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  const HOUR = 3600_000, ago = (ms) => new Date(Date.now() - ms).toISOString();
+  const wosCalls = () => calls.filter((c) => c.includes("api.workos.com")).length;
+  const UA = {
+    macSafari: "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15",
+    winChrome: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+    winEdge: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36 Edg/130.0.2849.56",
+    iphoneSafari: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1",
+    iphoneChrome: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/130.0.6723.37 Mobile/15E148 Safari/604.1",
+    androidChrome: "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36",
+    androidSamsung: "Mozilla/5.0 (Linux; Android 14; SM-S928B) AppleWebKit/537.36 (KHTML, like Gecko) SamsungBrowser/26.0 Chrome/122.0.0.0 Mobile Safari/537.36",
+    linuxFirefox: "Mozilla/5.0 (X11; Linux x86_64; rv:131.0) Gecko/20100101 Firefox/131.0",
+    ipadDesktop: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15",   // iPadOS asking for desktop pages: says Macintosh
+    ipad: "Mozilla/5.0 (iPad; CPU OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
+    garbage: "curl/8.4.0 <script>alert(1)</script> Mozilla",
+    empty: "",
+    nothing: null,
+    opera: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36 OPR/115.0.0.0",
+    chromeOS: "Mozilla/5.0 (X11; CrOS x86_64 14541.0.0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36",
+    iphoneFirefox: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) FxiOS/131.0 Mobile/15E148 Safari/605.1.15",
+    iphoneEdge: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 EdgiOS/130.2849.56 Mobile/15E148 Safari/605.1.15",
+    androidEdge: "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36 EdgA/130.0.2849.57",
+    macChrome: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+    macFirefox: "Mozilla/5.0 (Macintosh; Intel Mac OS X 14.7; rv:131.0) Gecko/20100101 Firefox/131.0",
+  };
+  const WANT = {
+    macSafari: ["Mac", "Safari"], winChrome: ["Windows", "Chrome"], winEdge: ["Windows", "Edge"], iphoneSafari: ["iPhone", "Safari"],
+    iphoneChrome: ["iPhone", "Chrome"], androidChrome: ["Android", "Chrome"], androidSamsung: ["Android", "Samsung Internet"],
+    linuxFirefox: ["Linux", "Firefox"], ipadDesktop: ["Mac", "Safari"], ipad: ["iPad", "Safari"], garbage: ["Unknown device", "Browser"],
+    empty: ["Unknown device", "Browser"], nothing: ["Unknown device", "Browser"], opera: ["Windows", "Opera"], chromeOS: ["Chrome OS", "Chrome"],
+    iphoneFirefox: ["iPhone", "Firefox"], iphoneEdge: ["iPhone", "Edge"], androidEdge: ["Android", "Edge"], macChrome: ["Mac", "Chrome"], macFirefox: ["Mac", "Firefox"],
+  };
+
+  // A reader who signed in 3 hours ago (not "recent") and has no WorkOS account: neither matters for these routes.
+  const dv = addSbUser("devices@example.com", { app_metadata: { provider: "email", providers: ["email"], signed_in_at: ago(3 * HOUR) } });
+  const cur = session(dv, [{ method: "otp", timestamp: Math.round((Date.now() - 3 * HOUR) / 1000) + 3 }], { ua: UA.macSafari, created: ago(3 * HOUR), updated: ago(2 * HOUR), ip: "203.0.113.9" });
+  const win = session(dv, [], { ua: UA.winChrome, created: ago(26 * HOUR), updated: ago(26 * HOUR), refreshed: ago(HOUR), ip: "198.51.100.4" });   // refreshed an hour ago: newest by refreshed_at
+  const phone = session(dv, [], { ua: UA.iphoneSafari, created: ago(5 * HOUR), updated: ago(5 * HOUR), ip: "203.0.113.1" });
+  const dead = session(dv, [], { ua: UA.winEdge, created: ago(40 * HOUR), notAfter: ago(HOUR) });   // past its not_after
+  let w0 = wosCalls();
+  r = await call("/security/devices", { token: cur }); j = await J(r);
+  let list = (j && j.devices) || [];
+  const row = (t) => list.find((d) => d.id === sidOf(t));
+  check("DV-1: GET /security/devices -> 200 { devices }: one row per live session, no WorkOS call, no recent sign-in needed", r.status === 200 && list.length === 3 && !!row(cur) && !!row(win) && !!row(phone) && wosCalls() === w0, r.status + " " + JSON.stringify(j));
+  check("DV-1b: each row has exactly id, current, os, browser, last_active, signed_in", list.length > 0 && list.every((d) => same(Object.keys(d).sort(), ["browser", "current", "id", "last_active", "os", "signed_in"])), JSON.stringify(list[0]));
+  check("DV-1c: the token's own session is the one row marked current", list.filter((d) => d.current).length === 1 && !!row(cur) && row(cur).current === true, JSON.stringify(list.map((d) => [d.id === sidOf(cur), d.current])));
+  const text1 = await r.text();
+  check("DV-1d: the user agent and the address never reach the browser", !/Mozilla|AppleWebKit|203\.0\.113|198\.51\.100|user_agent|"ip"/.test(text1), text1);
+  check("DV-1e: a session past its not_after is not listed", !row(dead));
+  check("DV-1f: Mac · Safari / Windows · Chrome / iPhone · Safari", !!row(cur) && row(cur).os === "Mac" && row(cur).browser === "Safari" && row(win).os === "Windows" && row(win).browser === "Chrome" && row(phone).os === "iPhone" && row(phone).browser === "Safari", JSON.stringify(list.map((d) => d.os + " · " + d.browser)));
+  check("DV-2: ordered by last activity: this device (active now), the Windows one refreshed an hour ago, the iPhone from 5 hours ago", same(list.map((d) => d.id), [sidOf(cur), sidOf(win), sidOf(phone)]), JSON.stringify(list.map((d) => d.last_active)));
+  check("DV-2b: last_active is the latest of updated/refreshed/created and signed_in is created_at", !!row(win) && Math.abs(Date.parse(row(win).last_active) - (Date.now() - HOUR)) < 5000 && Math.abs(Date.parse(row(win).signed_in) - (Date.now() - 26 * HOUR)) < 5000 && Math.abs(Date.parse(row(phone).last_active) - (Date.now() - 5 * HOUR)) < 5000, JSON.stringify(row(win)));
+  check("DV-2c: the current device counts as active now (this request), not when its token was last refreshed", !!row(cur) && Math.abs(Date.parse(row(cur).last_active) - Date.now()) < 5000 && Math.abs(Date.parse(row(cur).signed_in) - (Date.now() - 3 * HOUR)) < 5000, JSON.stringify(row(cur)));
+
+  // DV-3: the user-agent words (one session per agent, one list)
+  const agents = addSbUser("agents@example.com");
+  const toks = Object.fromEntries(Object.keys(UA).map((k) => [k, session(agents, [], { ua: UA[k] })]));
+  r = await call("/security/devices", { token: toks.macSafari }); j = await J(r);
+  const seen = Object.fromEntries(((j && j.devices) || []).map((d) => [d.id, d]));
+  let n = 0;
+  for (const [k, [os, browser]] of Object.entries(WANT)) {
+    const d = seen[sidOf(toks[k])];
+    check(`DV-3.${++n}: ${k} -> ${os} · ${browser}`, !!d && d.os === os && d.browser === browser, JSON.stringify(d && [d.os, d.browser]));
+  }
+  check("DV-3x: nothing from a crafted user agent is echoed", r.status === 200 && Object.keys(seen).length === Object.keys(UA).length && !/<script>|curl|alert|Mozilla/.test(await r.text()));
+
+  // DV-4: sign out another device
+  let ends = world.sessionEnds.length;
+  r = await call("/security/devices/signout", { method: "POST", token: cur, body: { id: sidOf(phone) } }); j = await J(r);
+  const r4 = await call("/security/devices", { token: cur }); const j4 = await J(r4);
+  check("DV-4: sign out another device -> 200 { ended: true }; it leaves the list, its refresh tokens are gone, the other sessions stay", r.status === 200 && same(j, { ended: true }) && !sessions.has(sidOf(phone)) && refreshTokens.every((t) => t.session_id !== sidOf(phone)) && sessions.has(sidOf(win)) && refreshTokens.some((t) => t.session_id === sidOf(win)) && same(j4.devices.map((d) => d.id), [sidOf(cur), sidOf(win)]), r.status + " " + JSON.stringify(j) + " " + JSON.stringify(j4));
+  check("DV-4b: the SQL call carries the token's user id and that session id, nothing else", world.sessionEnds.length === ends + 1 && same(world.sessionEnds.at(-1), { p_user: dv.id, p_session: sidOf(phone) }), JSON.stringify(world.sessionEnds.at(-1)));
+  // DV-5: the current one
+  ends = world.sessionEnds.length;
+  r = await call("/security/devices/signout", { method: "POST", token: cur, body: { id: sidOf(cur) } }); j = await J(r);
+  const r5 = await call("/security/devices/signout", { method: "POST", token: cur, body: { id: sidOf(cur).toUpperCase() } }); const j5 = await J(r5);
+  check("DV-5: sign out the current device -> 409 current ('use Sign out at the top of the page'), upper-cased too; session kept; the database is not asked", r.status === 409 && j.code === "current" && j.error === "To sign out this device, use Sign out at the top of the page." && r5.status === 409 && j5.code === "current" && sessions.has(sidOf(cur)) && world.sessionEnds.length === ends, r.status + " " + JSON.stringify(j) + " / " + r5.status);
+  // DV-6: another reader's session, and a uuid that is nobody's
+  const strangerTok = session(reader, [], { ua: UA.winChrome });
+  r = await call("/security/devices/signout", { method: "POST", token: cur, body: { id: sidOf(strangerTok) } }); j = await J(r);
+  check("DV-6: an id that belongs to another reader -> 400 not_found ('That device could not be found.'); their session and refresh token untouched", r.status === 400 && j.code === "not_found" && j.error === "That device could not be found." && sessions.has(sidOf(strangerTok)) && refreshTokens.some((t) => t.session_id === sidOf(strangerTok)), r.status + " " + JSON.stringify(j));
+  r = await call("/security/devices/signout", { method: "POST", token: cur, body: { id: crypto.randomUUID() } }); j = await J(r);
+  check("DV-6b: a well-formed id that is nobody's -> 400 not_found", r.status === 400 && j.code === "not_found", r.status + " " + JSON.stringify(j));
+  // DV-7 / DV-8: not a uuid, or no id
+  ends = world.sessionEnds.length;
+  const bads = ["abc", "", 123, null, true, "'; delete from auth.sessions; --", { id: sidOf(win) }, [sidOf(win)], sidOf(win) + "x", sidOf(win).replace(/-/g, "")];
+  const badOut = [];
+  for (const bad of bads) { const rr = await call("/security/devices/signout", { method: "POST", token: cur, body: { id: bad } }); const jj = await J(rr); badOut.push(rr.status + ":" + (jj && jj.code)); }
+  check("DV-7: an id that is not a uuid (string, number, null, object, array, SQL, near-misses) -> 400 not_found every time; the database is never asked", badOut.every((o) => o === "400:not_found") && world.sessionEnds.length === ends && sessions.has(sidOf(win)), JSON.stringify(badOut));
+  r = await call("/security/devices/signout", { method: "POST", token: cur, body: {} }); j = await J(r);
+  const r8 = await call("/security/devices/signout", { method: "POST", token: cur }); const j8 = await J(r8);
+  check("DV-8: no id, or no body at all -> 400 not_found", r.status === 400 && j.code === "not_found" && r8.status === 400 && j8.code === "not_found" && world.sessionEnds.length === ends, r.status + " " + r8.status);
+  // DV-9..12: the usual rules
+  r = await call("/security/devices"); j = await J(r);
+  const r9 = await call("/security/devices/signout", { method: "POST", body: { id: sidOf(win) } }); const j9 = await J(r9);
+  const r9b = await call("/security/devices", { token: "junk.junk.junk" });
+  check("DV-9: no token / a bad token -> 401 reauth on both routes; nothing ended", r.status === 401 && j.code === "reauth" && r9.status === 401 && j9.code === "reauth" && r9b.status === 401 && sessions.has(sidOf(win)), r.status + " " + r9.status + " " + r9b.status);
+  r = await call("/security/devices", { method: "POST", token: cur, body: {} });
+  check("DV-10: POST /security/devices -> 405", r.status === 405, r.status);
+  r = await call("/security/devices/signout", { token: cur });
+  const r11 = await call("/security/devicesx", { token: cur }), r11b = await call("/security/devices/", { token: cur });
+  check("DV-11: GET /security/devices/signout -> 405; GET on any other /security/... path (devicesx, devices/) -> 405 too", r.status === 405 && r11.status === 405 && r11b.status === 405, r.status + " " + r11.status + " " + r11b.status);
+  r = await call("/security", { method: "POST", token: cur }); const r11c = await call("/security/totp/start", { token: cur });
+  check("DV-11b: the old rule still holds: POST /security -> 405, GET /security/totp/start -> 405", r.status === 405 && r11c.status === 405, r.status + " " + r11c.status);
+  r = await call("/security/devices", { origin: PREVIEW, token: cur });
+  const r12 = await call("/security/devices/signout", { method: "POST", origin: PREVIEW, token: cur, body: { id: sidOf(win) } });
+  const r12b = await call("/security/devices", { origin: null, token: cur });
+  check("DV-12: a look-alike origin, or no origin -> 403 on both routes; nothing ended", r.status === 403 && r12.status === 403 && r12b.status === 403 && sessions.has(sidOf(win)), r.status + " " + r12.status + " " + r12b.status);
+  r = await call("/security/devices", { method: "OPTIONS" });
+  const r12c = await call("/security/devices", { token: cur });
+  check("DV-12b: preflight 204; the list answer carries the exact-origin CORS header and no-store", r.status === 204 && r12c.headers.get("access-control-allow-origin") === SITE && r12c.headers.get("cache-control") === "no-store", r.status + " " + r12c.headers.get("access-control-allow-origin"));
+  // DV-13: the SQL functions fail or are missing
+  for (const how of [true, 404]) {
+    fail.sessions = how;
+    r = await call("/security/devices", { token: cur }); j = await J(r);
+    const rs = await call("/security/devices/signout", { method: "POST", token: cur, body: { id: sidOf(win) } }); const js = await J(rs);
+    check(`DV-13 (${how === 404 ? "migration not applied: rpc 404" : "database error: rpc 500"}): list -> 502 with CORS and plain words; signout -> 502, session kept`, r.status === 502 && r.headers.get("access-control-allow-origin") === SITE && j.error === "We couldn't list your devices just now. Try again in a minute." && rs.status === 502 && js.error === "That device couldn't be signed out just now. Try again in a minute." && sessions.has(sidOf(win)), r.status + " " + JSON.stringify(j) + " / " + rs.status + " " + JSON.stringify(js));
+  }
+  fail.sessions = false;
+  // DV-14: no recent-sign-in gate and no WorkOS lookup: the same session that cannot change two-step can see and end its devices
+  r = await call("/security/totp/start", { method: "POST", token: cur, body: {} }); j = await J(r);
+  const r14 = await call("/security/devices/signout", { method: "POST", token: cur, body: { id: sidOf(win) } }); const j14 = await J(r14);
+  check("DV-14: the same not-recent session with no WorkOS account: two-step change -> 403 reauth, but its devices signout -> 200", r.status === 403 && j.code === "reauth" && r14.status === 200 && j14.ended === true && !sessions.has(sidOf(win)) && refreshTokens.every((t) => t.session_id !== sidOf(win)), r.status + " " + r14.status);
+  r = await call("/security/devices", { token: cur }); j = await J(r);
+  check("DV-14b: only this device left -> one row, current", r.status === 200 && j.devices.length === 1 && j.devices[0].current === true && j.devices[0].id === sidOf(cur), JSON.stringify(j));
+  // DV-15: a session ended from another device. The auth server refuses that
+  // token at once (403 session_not_found), so the bridge answers 401 reauth:
+  // the device is bounced from every auth call straight away, whatever its
+  // access token's expiry. (Data reads through PostgREST, which checks only
+  // the signature, run on until the token expires: the "up to an hour" caveat.)
+  const lone = addSbUser("lone@example.com");
+  const loneTok = session(lone, [], { ua: UA.winChrome });
+  sessions.delete(sidOf(loneTok));
+  r = await call("/security/devices", { token: loneTok, ua: UA.iphoneChrome }); j = await J(r);
+  check("DV-15: its session row already gone -> the auth server refuses the token -> 401 reauth, no list", r.status === 401 && j.code === "reauth" && !("devices" in j), r.status + " " + JSON.stringify(j));
+  // DV-15b: belt and braces for an auth server that does not check the row: the reader's own device is still listed
+  fail.gotrueLoose = true;
+  r = await call("/security/devices", { token: loneTok, ua: UA.iphoneChrome }); j = await J(r);
+  check("DV-15b: an auth server that still accepts the token -> the list still shows this device, current, named from the request's own browser", r.status === 200 && j.devices.length === 1 && j.devices[0].current === true && j.devices[0].id === sidOf(loneTok) && j.devices[0].os === "iPhone" && j.devices[0].browser === "Chrome", JSON.stringify(j));
+  fail.gotrueLoose = false;
+  // DV-16: a token without a session_id claim (not what GoTrue issues today): listed, none marked current
+  const noSid = jwt({ sub: dv.id, amr: [] }); tokens.set(noSid, dv.id);
+  r = await call("/security/devices", { token: noSid }); j = await J(r);
+  check("DV-16: a token without a session_id claim -> 200, the sessions listed, none marked current", r.status === 200 && j.devices.length === 1 && j.devices.every((d) => d.current === false), JSON.stringify(j));
+  // DV-17: the status route is untouched
+  r = await call("/security?full=1", { token: cur }); j = await J(r);
+  check("DV-17: GET /security?full=1 is unchanged (no devices key, still says signed_in_at)", r.status === 200 && !("devices" in j) && "signed_in_at" in j, JSON.stringify(j));
+  // DV-18: a request loop on the devices routes is braked per reader (60 a minute), other readers and the other routes unaffected
+  const loop = addSbUser("loop@example.com");
+  const loopTok = session(loop, [], { ua: UA.macSafari });
+  const calm = addSbUser("calm@example.com");
+  const calmTok = session(calm, [], { ua: UA.winChrome });
+  const codes = [];
+  for (let i = 0; i < 60; i++) { const rr = await call("/security/devices", { token: loopTok }); codes.push(rr.status); }
+  ends = world.sessionEnds.length;
+  r = await call("/security/devices/signout", { method: "POST", token: loopTok, body: { id: crypto.randomUUID() } }); j = await J(r);
+  const r18 = await call("/security/devices", { token: loopTok }); const j18 = await J(r18);
+  check("DV-18: 60 device calls in a minute pass; the 61st and 62nd (signout, list) -> 429 in plain words with CORS, the database not asked", codes.every((c) => c === 200) && r.status === 429 && j.error === "Too many requests. Wait a minute, then try again." && r18.status === 429 && j18.error === j.error && r18.headers.get("access-control-allow-origin") === SITE && world.sessionEnds.length === ends, JSON.stringify(codes.filter((c) => c !== 200)) + " " + r.status + " " + JSON.stringify(j) + " " + r18.status);
+  const r18b = await call("/security/devices", { token: calmTok }); const j18b = await J(r18b);
+  const r18c = await call("/security?full=1", { token: loopTok });
+  check("DV-18b: another reader's list still answers 200, and the throttled reader's status route is untouched", r18b.status === 200 && j18b.devices.length === 1 && r18c.status === 200, r18b.status + " " + r18c.status);
 }
 
 console.log(`\n${passes} passed, ${fails} failed`);

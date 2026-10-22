@@ -23,8 +23,12 @@
 //   POST /workos-auth/security/totp/confirm  {setup, code}   -> two-step on
 //   POST /workos-auth/security/totp/remove   {code}          -> two-step off
 //   POST /workos-auth/security/password      {password, code?} -> set or change the WorkOS password
+//   GET  /workos-auth/security/devices                -> { devices: [ { id, current, os, browser, last_active, signed_in } ] }
+//                                                        every browser and phone signed in to this account (one per Supabase session)
+//   POST /workos-auth/security/devices/signout {id}   -> { ended: true }: that one other device is signed out
 //   (security routes: Authorization: Bearer <the reader's Supabase access token>;
-//    changes need a sign-in in the last 20 minutes)
+//    changes need a sign-in in the last 20 minutes, except the devices routes: see devices();
+//    the two devices routes answer 429 after 60 calls a minute from one reader)
 //
 // The email-code routes and direct provider starts (?provider=GoogleOAuth …)
 // serve the site's own sign-up page (/?signup: every question on one page;
@@ -61,6 +65,7 @@ const COOKIE_PATH = "/functions/v1/workos-auth";
 // "authkit" = the WorkOS-hosted sign-in page (email code or a provider, all on WorkOS).
 const PROVIDERS = new Set(["authkit", "GoogleOAuth", "MicrosoftOAuth", "GitHubOAuth", "LinkedInOAuth"]);
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const DEFAULT_SITE = "https://attackedmap.vercel.app";
 // The sign-up page's routes (see the header): on unless switched off.
 const SIGNUP_FORM = (Deno.env.get("BRIDGE_SIGNUP_FORM") ?? "").trim().toLowerCase() !== "off";
@@ -294,7 +299,9 @@ async function stampSignIn(user: Record<string, any>, s: { workosUserId: string;
 // GoTrue labels every POST /verify session "otp", so a direct Supabase
 // email-code or recovery session opened inside this short window would count
 // too: closing those direct routes is docs/MFA-PASSKEYS.md §3.
-async function readerFrom(req: Request): Promise<{ user: Record<string, any>; signedInAt: number } | null> {
+// sessionId is the token's session_id claim (the auth.sessions row this token
+// belongs to), lower-cased, or null for a token without one.
+async function readerFrom(req: Request): Promise<{ user: Record<string, any>; signedInAt: number; sessionId: string | null } | null> {
   const m = /^Bearer\s+([A-Za-z0-9_-]+\.([A-Za-z0-9_-]+)\.[A-Za-z0-9_-]+)$/.exec(req.headers.get("authorization") ?? "");
   if (!m) return null;
   const r = await fetch(`${SB_URL}/auth/v1/user`, { headers: { apikey: SERVICE, Authorization: `Bearer ${m[1]}` }, signal: AbortSignal.timeout(5000) });
@@ -302,18 +309,19 @@ async function readerFrom(req: Request): Promise<{ user: Record<string, any>; si
   if (!r.ok) { await r.body?.cancel().catch(() => {}); throw new Error(`auth server answered ${r.status}`); }
   const user = await r.json().catch(() => null);
   if (!user || !user.id || !EMAIL.test(String(user.email || "")) || !user.email_confirmed_at) return null;
+  let claims: Record<string, any> = {};
+  try { const c = JSON.parse(new TextDecoder().decode(fromB64url(m[2]))); if (c && typeof c === "object") claims = c; }
+  catch { /* unreadable: not recent, no session id */ }
+  const sessionId = typeof claims.session_id === "string" && UUID.test(claims.session_id) ? claims.session_id.toLowerCase() : null;
   let signedInAt = 0;
   const stamp = Date.parse(String(user.app_metadata?.signed_in_at || "")) / 1000;
   if (Number.isFinite(stamp)) {
-    try {
-      const claims = JSON.parse(new TextDecoder().decode(fromB64url(m[2])));
-      for (const a of Array.isArray(claims.amr) ? claims.amr : []) {
-        const t = Number(a?.timestamp) || 0;
-        if (a?.method === "otp" && t - stamp >= -15 && t - stamp <= BRIDGE_HANDOFF_S) signedInAt = Math.max(signedInAt, t);
-      }
-    } catch { /* unreadable: not recent */ }
+    for (const a of Array.isArray(claims.amr) ? claims.amr : []) {
+      const t = Number(a?.timestamp) || 0;
+      if (a?.method === "otp" && t - stamp >= -15 && t - stamp <= BRIDGE_HANDOFF_S) signedInAt = Math.max(signedInAt, t);
+    }
   }
-  return { user, signedInAt };
+  return { user, signedInAt, sessionId };
 }
 // The WorkOS account for a reader: the id the bridge recorded at sign-in, if
 // its (verified) email still matches. Changes (strict) use only that id; the
@@ -435,6 +443,131 @@ async function tellReader(email: string, what: boolean | "password"): Promise<vo
   catch (e) { console.warn("[workos-auth] change email not sent:", (e as Error).message); }
 }
 
+// ── Signed-in devices ───────────────────────────────────────────────────────
+// What a session's user agent says, in the two words the page shows ("Mac ·
+// Safari"). Deliberately small; the order of the tests is what matters:
+//   os: iPhone and iPad before Mac (both say "like Mac OS X"); Android and
+//       Chrome OS before Linux (both say Linux / X11). An iPad that asks for
+//       desktop pages (iPadOS) says Macintosh and is accepted as a Mac.
+//   browser: Edge (Edg/, EdgA/ on Android, EdgiOS/ on iPhone), Opera (OPR/),
+//       Samsung Internet, Chrome on iPhone (CriOS/) and Firefox on iPhone
+//       (FxiOS/) all say Chrome and/or Safari too, so they come first; Chrome
+//       says Safari, so it comes before Safari.
+// Nothing from the user agent is passed through: the answer is one of these
+// fixed words, so a crafted user agent can never put text on the page.
+function deviceOf(ua: string): { os: string; browser: string } {
+  const s = String(ua || "").slice(0, 1000);
+  const has = (re: RegExp) => re.test(s);
+  const os = has(/iPhone|iPod/) ? "iPhone"
+    : has(/iPad/) ? "iPad"
+    : has(/Android/) ? "Android"
+    : has(/CrOS/) ? "Chrome OS"
+    : has(/Windows/) ? "Windows"
+    : has(/Macintosh|Mac OS X/) ? "Mac"
+    : has(/Linux|X11/) ? "Linux"
+    : "Unknown device";
+  const browser = has(/Edg(e|A|iOS)?\//) ? "Edge"
+    : has(/OPR\/|Opera/) ? "Opera"
+    : has(/SamsungBrowser\//) ? "Samsung Internet"
+    : has(/CriOS\//) ? "Chrome"
+    : has(/FxiOS\//) ? "Firefox"
+    : has(/Firefox\//) ? "Firefox"
+    : has(/Chrome\/|Chromium\//) ? "Chrome"
+    : has(/Safari\//) ? "Safari"
+    : "Browser";
+  return { os, browser };
+}
+const isoOf = (v: unknown): string | null => { const t = Date.parse(String(v ?? "")); return Number.isFinite(t) ? new Date(t).toISOString() : null; };
+// One PostgREST call to a service-role-only SQL function (public._…): the
+// decoded JSON answer, or a thrown Error (the caller answers 502).
+async function rpc(fn: string, args: Record<string, unknown>): Promise<unknown> {
+  const r = await fetch(`${SB_URL}/rest/v1/rpc/${fn}`, { method: "POST", headers: ADMIN, body: JSON.stringify(args), signal: AbortSignal.timeout(5000) });
+  if (!r.ok) { await r.body?.cancel().catch(() => {}); throw new Error(`${fn} answered ${r.status}`); }
+  return await r.json();
+}
+// GET /security/devices and POST /security/devices/signout {id}: the reader's
+// own Supabase sessions (auth.sessions, through the two service-role SQL
+// functions in supabase/migrations/20261022_sessions.sql). The page shows
+// "Mac · Safari", "This device", the two times, and a Sign out button on every
+// other device.
+//
+// Unlike the other changes on this page these two routes have no
+// recent-sign-in gate and make no WorkOS call. Why that is safe:
+//  - the list carries only the device type, the browser and two times (never
+//    the user agent, the address, or anything typed), and only the reader's
+//    own sessions: the user id for both SQL calls is the checked token's;
+//  - ending one of the reader's OWN other sessions is the same power the page
+//    already has with "Sign out everywhere else" (supabase.auth.signOut scope
+//    "others", no bridge, no gate), and it can only shorten what a stolen
+//    token could do; the one session it cannot end is the current one (409
+//    "current": that is Sign out at the top of the page), so a stolen token
+//    cannot use it to lock its owner out of the device they are using.
+// Which session is "this device" comes from the token's session_id claim,
+// never from the page. 502, in plain words, when the SQL function is missing
+// (migration not applied) or fails.
+//
+// A brake on request loops (security() applies it before calling here): at
+// most DEVICES_PER_MIN calls a minute per reader, counted in this isolate (a
+// new isolate starts from zero, so it is a brake, not a quota), 429 in plain
+// words above it. The other /security routes have their own limits (the
+// wrong-code counter, the one-a-minute password gap); these two had none, and
+// a signout loop with random ids would run a DELETE per request. Keyed by the
+// checked reader, not the address: readers behind one shared address (an
+// office) must not throttle one another. One page visit makes one or two calls.
+const DEVICES_PER_MIN = 60;
+const devHits = new Map<string, { n: number; until: number }>();
+function devicesThrottled(userId: string): boolean {
+  const now = Date.now();
+  if (devHits.size > 5000) for (const [k, v] of devHits) if (v.until <= now) devHits.delete(k);
+  const h = devHits.get(userId);
+  if (!h || h.until <= now) { devHits.set(userId, { n: 1, until: now + 60_000 }); return false; }
+  h.n++;
+  return h.n > DEVICES_PER_MIN;
+}
+async function devices(req: Request, path: string, origin: string | null, user: Record<string, any>, sessionId: string | null): Promise<Response> {
+  const now = new Date().toISOString();
+  try {
+    if (path === "/security/devices") {
+      const rows = await rpc("_sessions_for", { p_user: user.id });
+      const list = (Array.isArray(rows) ? rows : [])
+        .filter((row) => row && typeof row.id === "string" && UUID.test(row.id))
+        .map((row) => {
+          const current = !!sessionId && row.id.toLowerCase() === sessionId;
+          const signed_in = isoOf(row.created_at) ?? now;
+          // this very request is activity: the current device is active now
+          return { id: row.id.toLowerCase(), current, ...deviceOf(String(row.user_agent ?? "")), last_active: current ? now : (isoOf(row.last_active) ?? signed_in), signed_in };
+        })
+        .sort((a, b) => Date.parse(b.last_active) - Date.parse(a.last_active));
+      // The reader's own device is always shown. Belt and braces: the auth
+      // server checks the token's session_id row on every call and refuses the
+      // token (403 session_not_found -> 401 reauth above) once that row is gone,
+      // so this branch is not reached on the live project; an auth server that
+      // does not check the row would still list this device, from this request.
+      if (sessionId && !list.some((d) => d.current)) {
+        list.unshift({ id: sessionId, current: true, ...deviceOf(req.headers.get("user-agent") ?? ""), last_active: now, signed_in: now });
+      }
+      return json({ devices: list }, 200, origin);
+    }
+    const body = await readJson(req);
+    const id = typeof body.id === "string" && UUID.test(body.id) ? body.id.toLowerCase() : null;
+    if (!id) return json({ error: "That device could not be found.", code: "not_found" }, 400, origin);
+    if (id === sessionId) return json({ error: "To sign out this device, use Sign out at the top of the page.", code: "current" }, 409, origin);
+    const ended = Number(await rpc("_end_session", { p_user: user.id, p_session: id }));
+    // Both ids are uuids (no secret, no address, nothing typed), logged so
+    // "who ended which session, when" can be read back from the function logs.
+    if (!(ended > 0)) {
+      console.log("[workos-auth] session not ended (not this reader's):", user.id, id);
+      return json({ error: "That device could not be found.", code: "not_found" }, 400, origin);
+    }
+    console.log("[workos-auth] session ended:", user.id, id);
+    return json({ ended: true }, 200, origin);
+  } catch (e) {
+    console.error("[workos-auth] devices:", (e as Error).message);
+    return json({ error: path === "/security/devices" ? "We couldn't list your devices just now. Try again in a minute."
+                                                       : "That device couldn't be signed out just now. Try again in a minute." }, 502, origin);
+  }
+}
+
 async function security(req: Request, path: string, origin: string | null): Promise<Response> {
   let r: Awaited<ReturnType<typeof readerFrom>>;
   try { r = await readerFrom(req); }
@@ -444,6 +577,11 @@ async function security(req: Request, path: string, origin: string | null): Prom
   }
   if (!r) return json({ error: "Your session has ended. Sign in again to see your security settings.", code: "reauth" }, 401, origin);
   const { user } = r;
+  // The signed-in devices: no WorkOS account needed and no recent-sign-in gate (why: see devices()).
+  if (path === "/security/devices" || path === "/security/devices/signout") {
+    if (devicesThrottled(user.id)) return json({ error: "Too many requests. Wait a minute, then try again.", code: "slow_down" }, 429, origin);
+    return devices(req, path, origin, user, r.sessionId);
+  }
   const email = String(user.email).toLowerCase();
   const am: Record<string, any> = user.app_metadata || {};
   const recent = Date.now() / 1000 - r.signedInAt < RECENT_SIGN_IN_S;
@@ -872,7 +1010,9 @@ Deno.serve(async (req: Request): Promise<Response> => {
   if (path === "/security" || path.startsWith("/security/")) {
     if (!allowed(origin)) return json({ error: "origin not allowed" }, 403, null);
     if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: cors(origin) });
-    if (path === "/security" ? req.method !== "GET" : req.method !== "POST") return json({ error: "method not allowed" }, 405, origin);
+    // GET only for the two reads (the status and the devices list), POST for every change.
+    const read = path === "/security" || path === "/security/devices";
+    if (read ? req.method !== "GET" : req.method !== "POST") return json({ error: "method not allowed" }, 405, origin);
     return security(req, path, origin);
   }
 

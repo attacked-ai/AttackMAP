@@ -35,6 +35,12 @@
      full-width button under its text, at least 44px tall for a thumb. */
   .sec-grid { grid-template-columns: 1fr !important; }
   .sec-row > .sec-act, .sec-pw-act { width: 100% !important; margin-left: 0 !important; padding: 12px 18px !important; min-height: 44px !important; }
+  /* The devices list's bottom "Sign out everywhere else" sits in a .r-btnrow
+     (full width already): the same 44px height as the row buttons above it. */
+  .sec-row .r-btnrow > button { min-height: 44px !important; padding: 12px 18px !important; }
+  /* The "About passkeys" glyph (28px): a 40px thumb target on phones. The
+     negative margin keeps its place in the row, so nothing around it moves. */
+  .sec-info { width: 40px !important; height: 40px !important; margin: -6px !important; }
 
   /* Reduce big vertical section padding. */
   .r-pad-y { padding-top: 48px !important; padding-bottom: 48px !important; }
