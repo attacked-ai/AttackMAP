@@ -347,6 +347,12 @@
 .dash .article-body .copy h2 { font-size: 18px; line-height: 1.25; margin: 26px 0 8px; letter-spacing: -.02em; font-weight: 700; }
 .dash .article-body .copy h2:first-child { margin-top: 0; }
 .dash .article-body .copy p { font-size: 14.5px; line-height: 1.65; margin: 0 0 12px; color: var(--body-text); overflow-wrap: break-word; }
+/* "Secondary GUARD mappings" chips: 26px tall, as before. A label wider than
+   the text column (long names on 280-390px phones) wraps inside its chip
+   instead of pushing the page sideways: the name drops under the category
+   code, and each wraps between words (inside a word only if one alone is
+   wider than the chip). One-line chips are unchanged. */
+.dash .article-body .copy .chip { height: auto; min-height: 26px; margin: 0 6px 6px 0; padding-top: 2px; padding-bottom: 2px; max-width: 100%; white-space: normal; flex-wrap: wrap; row-gap: 0; overflow-wrap: anywhere; }
 .dash .article-body aside { min-width: 0; }
 .dash .facts, .dash .locked { border: 1px solid var(--line-l); border-radius: var(--r-md); padding: 16px; margin-bottom: 16px; }
 .dash .facts h3, .dash .lk-head { font-family: var(--mono); font-size: 11px; font-weight: 500; letter-spacing: .14em; text-transform: uppercase; color: var(--muted-light); margin: 0 0 10px; }

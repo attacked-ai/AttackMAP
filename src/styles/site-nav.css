@@ -64,6 +64,32 @@
 .site-acct .acct-menu a.is-admin { color: var(--gc-TPR); font-weight: 700; }
 .site-acct .acct-menu button.is-danger { color: var(--s5-tx); }
 
+@media (min-width: 769px){
+  /* The sticky bar is a stacking context at z 60, so the menu (z 61) rose
+     only as far as the bar: on the Attack Map it opened underneath the
+     incident panels (.scene-panel z 99, the guided tour z 200), with only the
+     email header showing (2026-10-09). Lift the bar while the menu is open.
+     Still under every modal (9000+) and the toasts (300+); closed, it is
+     back at 60 and covers nothing. */
+  .site-nav.acct-open { z-index: 250; }
+}
+@media (min-width: 769px) and (max-height: 500px){
+  /* Short landscape screens (844x390, 882x344): tighter rows so the menu fits
+     at 390px, and where it still scrolls (344px, admin) a shadow at the edge
+     says there is more: touch screens show no scrollbar. The two `local`
+     layers ride with the content and cover the shadows at either end. */
+  .site-acct .acct-head { padding: 10px 16px; }
+  .site-acct .acct-menu a, .site-acct .acct-menu button { padding: 9px 16px; }
+  .site-acct .acct-menu {
+    background:
+      linear-gradient(var(--card) 40%, transparent) top / 100% 30px no-repeat local,
+      linear-gradient(transparent, var(--card) 60%) bottom / 100% 30px no-repeat local,
+      linear-gradient(rgba(14,17,22,.2), transparent) top / 100% 14px no-repeat scroll,
+      linear-gradient(transparent, rgba(14,17,22,.3)) bottom / 100% 18px no-repeat scroll,
+      var(--card);
+  }
+}
+
 @media (max-width: 768px){
   .site-acct { margin-left: 0; width: 100%; flex: none; }
   /* In the phone panel the menu sits in the flow; the panel scrolls instead. */

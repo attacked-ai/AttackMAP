@@ -40,6 +40,18 @@ function FontLoader() {
   return null;
 }
 
+// What the reader sees when the call fails. Only the RPC's own message
+// (RAISE ... P0001, "Invalid unsubscribe link.") is written for readers; a
+// malformed token falls back to the card's "invalid or expired" line; anything
+// else (the service down or restricted, a network error) is technical text,
+// which goes to the console instead.
+const SERVICE_DOWN = "We could not reach our servers just now, so nothing has changed yet. Please try the link again in a few minutes.";
+function friendlyError(error) {
+  if (error && error.code === "P0001" && error.message) return error.message;
+  if (error && error.code === "22P02") return null;
+  return SERVICE_DOWN;
+}
+
 export function UnsubscribePage({ token }) {
   const [state, setState] = useState({ status: "loading", email: null, error: null, already: false });
 
@@ -50,7 +62,8 @@ export function UnsubscribePage({ token }) {
         const { data, error } = await supabase.rpc("unsubscribe_by_token", { p_token: token });
         if (cancelled) return;
         if (error) {
-          setState({ status: "error", error: error.message || "Could not unsubscribe.", email: null, already: false });
+          console.error("[unsubscribe] unsubscribe_by_token failed:", error);
+          setState({ status: "error", error: friendlyError(error), email: null, already: false });
           return;
         }
         const row = Array.isArray(data) ? data[0] : data;
@@ -61,8 +74,9 @@ export function UnsubscribePage({ token }) {
           error: null,
         });
       } catch (e) {
+        console.error("[unsubscribe] request failed:", e);
         if (!cancelled) {
-          setState({ status: "error", error: e?.message || "Network error.", email: null, already: false });
+          setState({ status: "error", error: SERVICE_DOWN, email: null, already: false });
         }
       }
     })();

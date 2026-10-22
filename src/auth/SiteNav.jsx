@@ -75,7 +75,9 @@ export function SiteNav({ active }) {
 
   return (
     <>
-      <header role="banner" className="site-nav">
+      {/* `acct-open` lifts the bar while the account menu is open, so the menu
+          clears the Attack Map's floating panels (see site-nav.css). */}
+      <header role="banner" className={`site-nav${menuOpen ? " acct-open" : ""}`}>
         {/* ?home, not "/": for a signed-in reader "/" opens the dashboard,
             and the logo is the way back to the landing page. */}
         <a href="/?home" aria-label="Attacked.ai home" className="site-brand" onClick={brandClick}>

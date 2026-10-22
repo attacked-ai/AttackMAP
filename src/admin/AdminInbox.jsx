@@ -210,7 +210,7 @@ export function AdminInbox() {
       {/* Stats strip — a five-second pulse on the inbox state. Three
           status counts + total received. Background colour follows the
           status colour so the eye lands on Pending first. */}
-      <div style={{
+      <div className="adm-itiles" style={{
         display: "grid",
         gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))",
         gap: 10, marginBottom: 16,
