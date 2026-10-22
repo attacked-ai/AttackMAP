@@ -1,4 +1,5 @@
-// AdminBroadcasts — the broadcast (podcast episode) behind a briefing, as a
+// AdminBroadcasts — the podcast episode behind a briefing ("Podcasts" in the UI,
+// the owner's word; the code and the table keep the 21 Oct name "broadcast"), as a
 // product feature (2026-10-22). The admin uploads the episode file here and
 // picks the report it belongs to; from then on
 //   • the Attacked Hub plays it inside the report — the v5 shell's broadcast
@@ -87,7 +88,7 @@ export function AdminBroadcasts({ reportRef = "", compact = false, reports = nul
   const fail = (e) => {
     const m = e?.message || String(e || "Something went wrong.");
     const missing = /admin_list_broadcasts|admin_upsert_broadcast|report_broadcasts/.test(m) && /not exist|not find|404|schema cache/i.test(m);
-    setErr(missing ? "The broadcasts table is not on this database yet. Run supabase/migrations/20261021_report_broadcasts.sql and 20261022_broadcast_audio.sql, then reload." : m);
+    setErr(missing ? "The podcast table (report_broadcasts) is not on this database yet. Run supabase/migrations/20261021_report_broadcasts.sql and 20261022_broadcast_audio.sql, then reload." : m);
   };
   async function refresh() { setLoading(true); try { setList(await adminListBroadcasts()); setErr(null); } catch (e) { fail(e); } finally { setLoading(false); } }
   useEffect(() => { refresh(); }, []);
@@ -168,12 +169,12 @@ export function AdminBroadcasts({ reportRef = "", compact = false, reports = nul
       <div style={{ display: "flex", alignItems: compact ? "center" : "baseline", gap: compact ? 10 : 14, marginBottom: compact ? 10 : 18, flexWrap: "wrap" }}>
         {compact ? (
           <div>
-            <div style={{ fontSize: 15, fontWeight: 800 }}>Broadcasts{reportRef ? <span style={{ ...mono, fontSize: 11, color: BRAND.dim, marginLeft: 8 }}>{reportRef}</span> : null}</div>
-            <div style={{ fontSize: 11.5, color: BRAND.muted, lineHeight: 1.45 }}>The episode behind this briefing. Plays inside the report once published. Full manager: Admin → Broadcasts.</div>
+            <div style={{ fontSize: 15, fontWeight: 800 }}>Podcast{reportRef ? <span style={{ ...mono, fontSize: 11, color: BRAND.dim, marginLeft: 8 }}>{reportRef}</span> : null}</div>
+            <div style={{ fontSize: 11.5, color: BRAND.muted, lineHeight: 1.45 }}>The episode behind this briefing. Plays inside the report once published. Full manager: Admin → Podcasts.</div>
           </div>
         ) : (
           <>
-            <h1 style={{ fontSize: 26, fontWeight: 800, margin: 0 }}>Broadcasts</h1>
+            <h1 style={{ fontSize: 26, fontWeight: 800, margin: 0 }}>Podcasts</h1>
             <span style={{ color: BRAND.gold, fontWeight: 700, fontSize: 14 }}>{counts.Live || 0} live · {counts["Coming soon"] || 0} coming soon · {counts.Draft || 0} draft</span>
           </>
         )}
@@ -184,7 +185,7 @@ export function AdminBroadcasts({ reportRef = "", compact = false, reports = nul
       </div>
       {!compact && (
         <p style={{ margin: "-6px 0 16px", fontSize: 12.5, color: BRAND.muted, lineHeight: 1.55, maxWidth: 760 }}>
-          Upload the episode and pick the briefing it belongs to. A published episode with audio plays inside that report on the Attacked Hub (the broadcast card after the Executive Summary, or the bar under older reports), on the dashboard, and on a copy of the report opened by its link. The print PDF's broadcast card picks it up at the next print build.
+          Upload the day's episode and pick the briefing it belongs to. A published episode with audio plays inside that report on the Attacked Hub (the podcast card after the Executive Summary, or the Related-podcast bar under older reports), on the dashboard, and on a copy of the report opened by its link. The print PDF's podcast card picks it up at the next print build.
         </p>
       )}
       {msg && <div style={{ background: `${BRAND.gold}22`, border: `1px solid ${BRAND.gold}`, color: BRAND.white, padding: "9px 12px", borderRadius: 4, marginBottom: 12, fontSize: 12.5 }}>{msg}</div>}
@@ -193,7 +194,7 @@ export function AdminBroadcasts({ reportRef = "", compact = false, reports = nul
       {/* FORM */}
       {form && (
         <div style={{ display: "grid", gap: 12, background: BRAND.card, border: `1px solid ${BRAND.gold}55`, borderRadius: 6, padding: compact ? 12 : 16, marginBottom: 14 }}>
-          <div style={{ fontSize: 13, fontWeight: 700 }}>{form.id ? "Edit episode" : "New episode"}</div>
+          <div style={{ fontSize: 13, fontWeight: 700 }}>{form.id ? "Edit podcast episode" : "New podcast episode"}</div>
           <div>
             <label style={lbl}>Report</label>
             <input style={{ ...inp, ...mono }} list="bc-report-choices" value={form.report_ref} onChange={set("report_ref")} placeholder="ATK-2026-0908-NATS" autoComplete="off" spellCheck={false} />
@@ -231,7 +232,7 @@ export function AdminBroadcasts({ reportRef = "", compact = false, reports = nul
               </div>
               {(file || form.audio_url) && <button type="button" style={btn(false, { padding: "7px 10px", borderColor: BRAND.red, color: BRAND.red })} onClick={() => { setFile(null); setFileDur(undefined); setForm((f) => ({ ...f, audio_url: "" })); }}>Remove audio</button>}
             </div>
-            <div style={hint}>Drop the file or choose it: mp3, m4a, aac, ogg, wav, flac or webm, up to {MAX_AUDIO_BYTES / 1048576} MB. It is stored in the public broadcasts bucket and streams straight to the player. The length is read from the file.</div>
+            <div style={hint}>Drop the file or choose it: mp3, m4a, aac, ogg, wav, flac or webm, up to {MAX_AUDIO_BYTES / 1048576} MB. It is stored in the podcast storage (bucket "broadcasts") and streams straight to the player. The length is read from the file.</div>
           </div>
 
           <div><label style={lbl}>Episode page (optional)</label><input style={inp} value={form.page_url} onChange={set("page_url")} placeholder="https://open.spotify.com/episode/… — Spotify, Apple Podcasts, YouTube" spellCheck={false} /><div style={hint}>Without audio, the play button opens this page instead.</div></div>
@@ -240,7 +241,7 @@ export function AdminBroadcasts({ reportRef = "", compact = false, reports = nul
             <div><label style={lbl}>Published on</label><input style={inp} type="date" value={form.published_at} onChange={set("published_at")} /></div>
             <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: BRAND.white, paddingBottom: 9, gridColumn: compact ? "1 / -1" : "auto" }}><input type="checkbox" checked={form.published} onChange={set("published")} /> Published (visible to readers)</label>
           </div>
-          <div><label style={lbl}>Hosts (optional)</label><textarea style={{ ...inp, minHeight: 52 }} value={form.hosts_text} onChange={set("hosts_text")} placeholder={"One per line: Name — Role\nAman Sehgal — Founder, Attacked.ai"} /><div style={hint}>Shown on the report's broadcast card after the briefing's own analyst.</div></div>
+          <div><label style={lbl}>Hosts (optional)</label><textarea style={{ ...inp, minHeight: 52 }} value={form.hosts_text} onChange={set("hosts_text")} placeholder={"One per line: Name — Role\nAman Sehgal — Founder, Attacked.ai"} /><div style={hint}>Shown on the report's podcast card after the briefing's own analyst.</div></div>
           <div><label style={lbl}>Show notes</label><textarea style={{ ...inp, minHeight: 60 }} value={form.show_notes} onChange={set("show_notes")} placeholder="One or two lines on what the episode covers" /></div>
           <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
             <button style={btn(true)} disabled={!!busy} onClick={save}>{busy || (form.id ? "Save episode" : (form.published ? "Publish episode" : "Save draft"))}</button>
@@ -259,7 +260,7 @@ export function AdminBroadcasts({ reportRef = "", compact = false, reports = nul
       )}
       <div style={compact ? {} : { background: BRAND.obsidian, border: `1px solid ${BRAND.border}`, borderRadius: 8, overflow: "hidden" }}>
         {loading ? <div style={{ padding: compact ? "8px 0" : 36, textAlign: compact ? "left" : "center", color: BRAND.dim, fontSize: 12.5 }}>Loading…</div>
-          : rows.length === 0 ? <div style={{ padding: compact ? "8px 0" : 36, textAlign: compact ? "left" : "center", color: BRAND.dim, fontSize: 12.5 }}>{list.length === 0 ? "No episodes yet. Add the first one." : "No episodes match."}</div>
+          : rows.length === 0 ? <div style={{ padding: compact ? "8px 0" : 36, textAlign: compact ? "left" : "center", color: BRAND.dim, fontSize: 12.5 }}>{list.length === 0 ? "No podcast episodes yet. Add the first one." : "No episodes match."}</div>
           : rows.map((b) => {
             const [st, color] = episodeStatus(b);
             const file = b.audio_url && isAudioFile(b.audio_url) ? b.audio_url : null;
@@ -288,7 +289,7 @@ export function AdminBroadcasts({ reportRef = "", compact = false, reports = nul
 
       {!compact && (
         <div style={{ marginTop: 16, padding: "12px 14px", background: BRAND.obsidian, border: `1px solid ${BRAND.border}`, borderRadius: 8, fontSize: 12, color: BRAND.muted, lineHeight: 1.6 }}>
-          <b style={{ color: BRAND.white }}>How a reader hears it.</b> Open the report on the Hub: the v5 shell (NATS and later briefings) shows the broadcast card after the Executive Summary with a working play button; older baked reports get the Related-broadcast bar under the frame. One published episode per report is shown (the one with the lowest sort order, then the newest). Unpublish to take it down without deleting the file.
+          <b style={{ color: BRAND.white }}>How a reader hears it.</b> Open the report on the Hub: the v5 shell (NATS and later briefings) shows the podcast card after the Executive Summary with a working play button; older baked reports get the Related-podcast bar under the frame. One published episode per report is shown (the one with the lowest sort order, then the newest). Unpublish to take it down without deleting the file.
         </div>
       )}
     </div>

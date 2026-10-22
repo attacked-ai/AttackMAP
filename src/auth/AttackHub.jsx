@@ -261,7 +261,7 @@ const HUB_CSS = `
    minus the nav (64px on windows over 500px tall), hence 564px here. */
 @media (orientation:landscape) and (max-height:564px){.hubft .rf-back{top:7px}}
 .hubft .rframe{width:100%;border:none;display:block;height:calc(100vh - var(--nav-h,64px));height:calc(100dvh - var(--nav-h,64px))}
-/* Related broadcast: the episode bar docked at the foot of an open report (src/lib/broadcasts.js). */
+/* Related podcast: the episode bar docked at the foot of an open report (src/lib/broadcasts.js). */
 .hubft .rf-bc{position:absolute;left:0;right:0;bottom:0;z-index:21;display:flex;align-items:center;gap:14px;padding:10px 24px;background:rgba(14,17,22,.96);color:#fff;border-top:1px solid #FCBD00;backdrop-filter:blur(6px);font-family:Inter,sans-serif}
 .hubft .rf-bc .k{font:600 10px/1 "JetBrains Mono",ui-monospace,monospace;letter-spacing:.14em;text-transform:uppercase;color:#FCBD00;margin-bottom:4px}
 .hubft .rf-bc .t{font-size:13.5px;font-weight:600;line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -532,15 +532,15 @@ function BroadcastBar({ eps }) {
   const file = ep.audio_url && isAudioFile(ep.audio_url) ? ep.audio_url : null;
   const meta = [ep.series, ep.episode, formatDuration(ep.duration_sec), ep.published_at ? new Date(ep.published_at).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }) : null].filter(Boolean).join(" · ");
   return (
-    <div className="rf-bc" role="region" aria-label="Related broadcast">
+    <div className="rf-bc" role="region" aria-label="Related podcast">
       <span className="ic" aria-hidden="true"><i /></span>
       <div className="w">
-        <div className="k">Related broadcast{eps.length > 1 ? ` · ${eps.length} episodes` : ""}</div>
+        <div className="k">Related podcast{eps.length > 1 ? ` · ${eps.length} episodes` : ""}</div>
         <div className="t" title={ep.title}>{ep.title}</div>
         <div className="m">{meta}{ep.show_notes ? ` — ${ep.show_notes}` : ""}</div>
       </div>
       {file ? <audio controls preload="none" src={file} /> : link ? <a className="go" href={link} target="_blank" rel="noopener">Listen ↗</a> : <span className="soon">Episode coming soon</span>}
-      <button type="button" className="x" aria-label="Hide the broadcast bar" onClick={() => setHidden(true)}>×</button>
+      <button type="button" className="x" aria-label="Hide the podcast bar" onClick={() => setHidden(true)}>×</button>
     </div>
   );
 }

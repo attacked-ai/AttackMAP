@@ -98,7 +98,7 @@ function TabIcon({ name, size = 15 }) {
 
 const TABS = [
   { id: "reports",   label: "Reports",   icon: "reports",   body: AdminReports },
-  { id: "broadcasts", label: "Broadcasts", icon: "broadcasts", body: AdminBroadcasts },
+  { id: "broadcasts", label: "Podcasts", icon: "broadcasts", body: AdminBroadcasts },
   { id: "inbox",     label: "Inbox",     icon: "inbox",     body: AdminInbox },
   { id: "briefings", label: "Briefings", icon: "briefings", body: AdminBriefings },
   { id: "users",     label: "Users",     icon: "users",     body: AdminUsers },
