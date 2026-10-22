@@ -13,7 +13,7 @@
 | **Reminder card** (`src/auth/SecurityNudge.jsx`, 19 Oct) | A polite card once per visit for readers without two-step: "Set it up" (→ Profile → Security) or "Remind me later" (7, then 14, then 30 days). Hidden after passkey/SSO sign-ins, on profile/admin/map/checkout/legal pages, and while the bridge can't answer, so it **appears only once the bridge below is deployed**. Preview: `review/security-nudge-preview.html`. |
 | WorkOS **Production** | **Not set up.** Two-step off, passkeys off, no sign-in methods. Mohini's WorkOS role is read-only there, so a WorkOS **admin** must do it (§4). |
 | **Profile → Security** panel (`src/auth/SecurityPanel.jsx`) | Built, tested with a simulated session (`review/security-preview.html`). It turns two-step on (scan QR, confirm one code) and off (current code), explains passkeys, and shows how the last sign-in was made. |
-| Sign-in bridge `supabase/functions/workos-auth` | **Updated, NOT deployed** (the Supabase connector tools were switched off). Adds the `/security` routes and records `auth_method` at each sign-in. It also switches off two unused routes that skipped the WorkOS page. Backup of the live version (v4): `D:\attacked-dev\backups\workos-auth-v4-2026-10-17.ts`. |
+| Sign-in bridge `supabase/functions/workos-auth` | **Updated, NOT deployed** (the Supabase connector tools were switched off). Adds the `/security` routes and records `auth_method` at each sign-in. Since 22 Oct it also serves the one-page sign-up (`/?signup`, WORKOS-SIGNIN.md): its email-code and direct Google / Microsoft routes refuse any account with a factor (409 `use_hosted`, or a second trip to the hosted sign-in); `BRIDGE_SIGNUP_FORM=off` closes them. Backup of the live version (v4): `D:\attacked-dev\backups\workos-auth-v4-2026-10-17.ts`. |
 | Database migration `supabase/migrations/20261017_mfa_attempts.sql` | **Written, NOT applied.** A private wrong-code counter (5 tries per 10 minutes, safe against parallel requests). |
 | Admin console | Shows a reminder banner until the admin has two-step on or signs in with a passkey. **A reminder only, not an access check yet** (§5). |
 
@@ -36,7 +36,7 @@
 
 **Sign-in works only from exact addresses:** the live site and localhost:5173 / :5180. Vercel preview links no longer sign in (a pattern for them could be claimed by someone else's Vercel project and catch a sign-in). To test a preview, add its exact address to the `WORKOS_ALLOWED_ORIGINS` secret (comma-separated).
 
-**If sign-in breaks:** redeploy the v4 backup file (step 2 with the backup's code).
+**If sign-in breaks:** redeploy the v4 backup file (step 2 with the backup's code). Once the new site (with `/?signup`) is live, a v4 bridge makes its sign-up page fall back to WorkOS's hosted sign-up (v4 does not say `signup_form`), so the site can stay; nothing else on it needs v5 except Profile → Security.
 
 ## 2. Test it on http://localhost:5173 (about 10 minutes, your own account)
 
@@ -64,6 +64,7 @@ Supabase's own email-code sign-in still works directly, with the public key, and
 2. **Add a Send Email hook** that refuses Supabase's own sign-in code emails (types magiclink, email, signup). The bridge's admin token never sends mail, so it keeps working.
 3. **Add a Custom Access Token hook:**
    - Supabase only issues a session that the bridge pre-approved a moment earlier. Password, OAuth and other direct routes are refused.
+   - The bridge's own sign-up routes (`/email/*`, direct Google / Microsoft, used by `/?signup`) already refuse any account with a factor: those sign in on the hosted page (WORKOS-SIGNIN.md).
    - This also makes "signed in with a passkey or code" belong to **each session**, which the admin-console rule (§5) needs.
 4. **Test it first:** on a separate test Supabase project (branching needs a paid plan), then on live with the dashboard toggle ready to switch it back off.
 

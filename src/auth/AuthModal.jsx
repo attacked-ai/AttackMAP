@@ -129,16 +129,23 @@ export function AuthModal({ open, onClose, intent = null, screen = "sign-up" }) 
   const [robot, setRobot] = useState(false);
   const [code, setCode] = useState("");
   const [sentAt, setSentAt] = useState(null);   // when the current code was sent — the newest email is the only valid one
-  // WorkOS: the WorkOS-hosted page (AuthKit, branded in the WorkOS dashboard)
-  // replaces this window: opening it sends the reader there. What WorkOS
-  // can't ask (job title, company, industry) comes right after the first
-  // sign-in, on "One last step" (main.jsx ProfileStep).
+  // WorkOS: sign-up is the site's own page (/?signup, SignUpPage.jsx: every
+  // question on one page, WorkOS checks the email); sign-in is the
+  // WorkOS-hosted page (AuthKit, branded in the WorkOS dashboard). Opening
+  // this window sends the reader to one or the other.
   const [hostedError, setHostedError] = useState(null);
   // No box on the way out (owner, 2026-10-10): "Opening secure sign-in…"
   // appears only if leaving takes more than 3 s; errors always show.
   const [slow, setSlow] = useState(false);
   useEffect(() => {
     if (!WORKOS || !open) return;
+    if (screen !== "sign-in") {
+      // Closed first: a page restored by the Back button must not come back
+      // with this window still "open", or the next click would do nothing.
+      onClose();
+      window.location.href = `/?signup${intent === "subscribe" ? "&intent=subscribe" : ""}`;
+      return;
+    }
     const ctl = new AbortController();   // closing the window stops the trip
     setHostedError(null);
     setSlow(false);

@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import ReactDOM from "react-dom/client";
 // Brand system first: fonts and tokens, then the shared navigation that every
 // page renders. Page-level stylesheets (dashboard, map) read the same tokens.
@@ -18,9 +18,11 @@ import { ProfilePage } from "./auth/ProfilePage.jsx";
 import { AdminDashboard } from "./admin/AdminDashboard.jsx";
 import { Dashboard } from "./dashboard/Dashboard.jsx";
 import { CompleteProfile } from "./auth/CompleteProfile.jsx";
+import { SignUpPage } from "./auth/SignUpPage.jsx";
 import { SecurityNudge } from "./auth/SecurityNudge.jsx";
 import { supabase } from "./lib/supabaseClient";
 import { WORKOS } from "./lib/workos";
+import { applySignupAnswers } from "./lib/signupAnswers";
 
 // ─────────────────────────────────────────────────────────────────────────
 // AppShell — decides what the visitor sees based on auth state.
@@ -95,6 +97,12 @@ function AppShell() {
   })();
   if (legalKey) {
     return <LegalPage pageKey={legalKey} />;
+  }
+
+  // ?signup — WorkOS sign-in only: the sign-up page, every question on one
+  // page (SignUpPage.jsx). Sign-in stays on the WorkOS-hosted page.
+  if (WORKOS && isSignup()) {
+    return <SignUpPage />;
   }
 
   // ?pricing — public marketing page. Accessible without auth.
@@ -233,18 +241,35 @@ function AppShell() {
   return <LandingPage />;
 }
 
-// WorkOS sign-in only: a reader who came in through Google / Microsoft /
-// GitHub / LinkedIn straight from "Sign in" never saw the sign-up form, so the
-// same questions are asked once (CompleteProfile.jsx) until the profile has an
-// industry. Legal pages and unsubscribe links stay readable without it.
+function isSignup() {
+  try { return new URLSearchParams(window.location.search).has("signup"); } catch { return false; }
+}
+
+// WorkOS sign-in only, and rare now that the sign-up page asks everything: a
+// new reader who came in through "Sign in" on the WorkOS page (Google there,
+// say) never saw the sign-up page, so the same questions are asked once
+// (CompleteProfile.jsx) until the profile has an industry. Answers already on
+// the account (user_metadata, kept by the sign-up page) are copied to the
+// profile instead of being asked again. Legal pages, unsubscribe links and
+// the sign-up page itself (it saves its own answers) stay clear of it.
 function ProfileStep() {
-  const { user, profile, loading, saveProfileBasics, signOut } = useAuth();
-  const show = WORKOS && !loading && !!user && !!profile && !profile.industry && (() => {
-    try { const q = new URLSearchParams(window.location.search); return !q.has("legal") && !q.has("unsubscribe"); }
+  const { user, profile, loading, saveProfileBasics, refreshProfile, signOut } = useAuth();
+  const meta = user?.user_metadata || {};
+  const missing = WORKOS && !loading && !!user && !!profile && !profile.industry && (() => {
+    try { const q = new URLSearchParams(window.location.search); return !q.has("legal") && !q.has("unsubscribe") && !q.has("signup"); }
     catch { return true; }
   })();
-  if (!show) return null;
-  const meta = user.user_metadata || {};
+  // "idle" -> "repairing" (copying the account's answers) -> "done" | "failed" (ask).
+  const [repair, setRepair] = useState("idle");
+  const canRepair = missing && !!meta.industry && repair !== "failed";
+  useEffect(() => {
+    if (!canRepair || repair !== "idle") return;
+    setRepair("repairing");
+    applySignupAnswers(user, { full_name: meta.full_name, role: meta.job_title, company: meta.company, industry: meta.industry })
+      .then(async (r) => { const fresh = r?.ok ? await refreshProfile() : null; setRepair(fresh?.industry ? "done" : "failed"); })
+      .catch(() => setRepair("failed"));
+  }, [canRepair, repair]); // eslint-disable-line react-hooks/exhaustive-deps
+  if (!missing || canRepair) return null;
   async function save(fields, consent) {
     try { await supabase.auth.updateUser({ data: { marketing_opt_in: !!consent } }); }
     catch (e) { console.warn("[Profile] opt-in not saved:", e?.message || e); }

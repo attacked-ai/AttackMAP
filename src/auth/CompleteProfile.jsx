@@ -1,10 +1,11 @@
 // ─────────────────────────────────────────────────────────────────────────
-// CompleteProfile — the sign-up form's questions, asked once after a first
-// sign-in that skipped the form (Google / Microsoft / GitHub / LinkedIn through
-// WorkOS, straight from "Sign in").
+// CompleteProfile — the sign-up page's questions, asked once after a first
+// sign-in that skipped the page (a new reader who used "Sign in" on the
+// WorkOS-hosted page, e.g. Google there). Sign-ups through /?signup
+// (SignUpPage.jsx) answer everything there and never see this.
 //
 //   name, job title, company, industry, email opt-in — the same fields and the
-//   same strings as AuthModal's "Create an account" form (src/lib/taxonomy.js).
+//   same strings as the sign-up page (src/lib/taxonomy.js).
 //   Industry decides what the dashboard and the daily brief lead with, so the
 //   step stays until it is answered; "Sign out" is the only way past it.
 //

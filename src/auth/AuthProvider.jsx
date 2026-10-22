@@ -22,7 +22,8 @@ import { sendCode, setSubscription } from "../lib/api";
 // VITE_AUTH_PROVIDER=workos: codes and social sign-in go through WorkOS
 // (lib/workos.js, supabase/functions/workos-auth); the Supabase session, the
 // profile row and the tiers stay exactly as they are.
-import { WORKOS, emailStart, emailVerify, startProvider, takeReturn, savePending, takePending } from "../lib/workos";
+import { WORKOS, emailStart, emailVerify, startProvider, takeReturn, takePending } from "../lib/workos";
+import { applySignupAnswers } from "../lib/signupAnswers";
 
 const AuthContext = createContext({
   user: null,
@@ -65,10 +66,10 @@ async function fetchProfile(userId) {
   return data;
 }
 
-// Back from Google / Microsoft / GitHub / LinkedIn through WorkOS: turn the
-// one-time token into the Supabase session, then save the sign-up form if it
-// was filled before the trip, so the reader lands on their dashboard with
-// nothing more to answer. Once per page load: StrictMode runs effects twice in
+// Back from Google / Microsoft / GitHub / LinkedIn or the hosted page through
+// WorkOS: turn the one-time token into the Supabase session, then save the
+// sign-up page's answers if they were given before the trip, so the reader
+// lands on their dashboard with nothing more to answer. Once per page load: StrictMode runs effects twice in
 // dev, and the token (already taken off the address) works only once.
 let returnTrip = null;
 function finishReturnTrip() {
@@ -78,19 +79,10 @@ function finishReturnTrip() {
     const { data, error } = await supabase.auth.verifyOtp({ token_hash: ret.token_hash, type: ret.type });
     if (error) { console.warn("[Auth] WorkOS sign-in could not be completed:", error.message); return; }
     const u = data?.user || data?.session?.user;
-    const pending = takePending();
-    if (!u?.id || !pending) return;
-    const uid = u.id;
-    const { marketing_opt_in, ...fields } = pending;
-    const before = await fetchProfile(uid);
-    // Name and picture from the provider (user metadata), where the form and
-    // the profile have none.
-    const meta = u.user_metadata || {};
-    if (!fields.full_name && !before?.full_name && meta.full_name) fields.full_name = meta.full_name;
-    if (!before?.avatar_url && meta.avatar_url) fields.avatar_url = meta.avatar_url;
-    // onboarded_at NULL -> set sends the welcome email (trg_welcome_on_onboarded).
-    await supabase.from("profiles").update({ ...fields, ...(before?.onboarded_at ? {} : { onboarded_at: new Date().toISOString() }) }).eq("id", uid);
-    if (typeof marketing_opt_in === "boolean") await supabase.auth.updateUser({ data: { marketing_opt_in } });
+    const pending = takePending(ret.n);
+    // Fills an empty profile only (name and picture from the provider where
+    // none was typed); the first save sends the welcome email.
+    if (u?.id && pending) await applySignupAnswers(u, pending);
   })().catch((e) => console.warn("[Auth] WorkOS sign-in could not be completed:", e?.message || e));
   return returnTrip;
 }
@@ -181,8 +173,7 @@ export function AuthProvider({ children }) {
   // `pending` (the sign-up form, if filled) is saved once the reader returns.
   const signInWithProvider = useCallback(async (provider, redirectTo, pending = null) => {
     if (WORKOS) {
-      if (pending) savePending(pending);
-      startProvider(provider, redirectTo);
+      startProvider(provider, redirectTo, pending);
       return;
     }
     const { error } = await supabase.auth.signInWithOAuth({

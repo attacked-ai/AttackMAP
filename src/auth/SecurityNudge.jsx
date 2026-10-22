@@ -23,7 +23,7 @@ const KEY = "atk.securityNudge";          // localStorage: { [userId]: { count, 
 const SEEN = "atk.securityNudge.seen";    // sessionStorage: the user already handled this visit
 const SNOOZE_DAYS = [7, 14, 30];
 const DELAY_MS = 3500;
-const QUIET_PARAMS = ["profile", "admin", "map", "legal", "unsubscribe", "subscribe", "pricing", "activate", "signin", "signin_error", "preview"];
+const QUIET_PARAMS = ["profile", "admin", "map", "legal", "unsubscribe", "subscribe", "pricing", "activate", "signin", "signin_error", "signup", "preview"];
 
 const read = (store, key) => { try { return JSON.parse(window[store].getItem(key) || "null"); } catch { return null; } };
 const write = (store, key, v) => { try { window[store].setItem(key, JSON.stringify(v)); } catch { /* private mode: asks again next visit */ } };

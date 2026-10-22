@@ -1,16 +1,17 @@
 // workos-auth — WorkOS sign-in for the Supabase-backed site (the Vercel build
 // and localhost).
 //
-// WorkOS proves who someone is: a 6-digit code it generates (we email it), or
-// Google / Microsoft / GitHub / LinkedIn through WorkOS. This function then signs
+// WorkOS proves who someone is: a 6-digit code it emails, or Google /
+// Microsoft / GitHub / LinkedIn through WorkOS. This function then signs
 // the person in to Supabase the same way the localhost testing sign-in does
 // (scripts/dev-direct-signin.mjs on main): create the account if the address is
 // new (email confirmed), mint a one-time magic-link token with the admin API, and
 // hand it to the page, which exchanges it with supabase.auth.verifyOtp. Sessions,
 // profiles, tiers and row-level security are unchanged.
 //
-//   POST /workos-auth/email/start   {email}          WorkOS makes a code; we email it
-//   POST /workos-auth/email/verify  {email, code}    -> { token_hash, type }
+//   POST /workos-auth/email/start   {email}          WorkOS makes a code and emails it
+//   POST /workos-auth/email/verify  {email, code, first_name?, last_name?}
+//                                                     -> { token_hash, type }
 //   GET  /workos-auth/providers                       -> { providers: [those switched on in WorkOS] }
 //   GET  /workos-auth/start?provider=authkit&screen_hint=sign-up&redirect=<page URL>
 //                                                     -> the WorkOS-hosted sign-in page
@@ -24,12 +25,20 @@
 //    changes need a sign-in in the last 20 minutes)
 //
 // The email-code routes and direct provider starts (?provider=GoogleOAuth …)
-// skip the WorkOS-hosted page, where WorkOS asks for the two-step code, and
-// the site no longer uses them: they answer only when BRIDGE_DIRECT_ROUTES=on.
+// serve the site's own sign-up page (/?signup: every question on one page;
+// sign-in stays on the WorkOS-hosted page). They skip the hosted page, where
+// WorkOS asks for the two-step code, so they never open a session for an
+// account that has a second step: WorkOS's own mfa_* answers, or any factor
+// on the account, send the reader to the hosted sign-in instead (409 code
+// "use_hosted" for the email code, a second trip to the hosted page for a
+// provider). BRIDGE_SIGNUP_FORM=off switches them off.
 //
 // Secrets (Edge Functions -> Secrets): WORKOS_API_KEY. WORKOS_CLIENT_ID defaults
 // to the Staging client. GMAIL_USER / GMAIL_APP_PASSWORD / SENDER_NAME are the
 // ones welcome-email already uses. SUPABASE_SERVICE_ROLE_KEY is built in.
+// WorkOS emails the sign-up code itself while its Magic Auth email is on
+// (WorkOS dashboard -> Emails). BRIDGE_CODE_EMAIL=ours sends our template
+// instead: only with WorkOS's email switched off, or the reader gets two.
 //
 // DEPLOY WITH verify_jwt = false (dashboard: "Verify JWT" OFF; MCP deploy:
 // verify_jwt: false). Browsers call /providers, /start and /callback with no
@@ -51,8 +60,13 @@ const COOKIE_PATH = "/functions/v1/workos-auth";
 const PROVIDERS = new Set(["authkit", "GoogleOAuth", "MicrosoftOAuth", "GitHubOAuth", "LinkedInOAuth"]);
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const DEFAULT_SITE = "https://attackedmap.vercel.app";
-// Email-code routes and direct provider starts (see the header): off unless asked for.
-const DIRECT_ROUTES = (Deno.env.get("BRIDGE_DIRECT_ROUTES") ?? "").trim().toLowerCase() === "on";
+// The sign-up page's routes (see the header): on unless switched off.
+const SIGNUP_FORM = (Deno.env.get("BRIDGE_SIGNUP_FORM") ?? "").trim().toLowerCase() !== "off";
+const OWN_CODE_EMAIL = (Deno.env.get("BRIDGE_CODE_EMAIL") ?? "").trim().toLowerCase() === "ours";
+// WorkOS answers that only its hosted page can finish (a two-step code, setting
+// one up, an email check, an organisation or SSO choice).
+const HOSTED_ONLY = new Set(["mfa_challenge", "mfa_enrollment", "email_verification_required",
+  "organization_selection_required", "sso_required", "organization_authentication_methods_required"]);
 
 // Pages allowed to use this function: the live site and the local dev servers,
 // exact origins only. No patterns: the callback hands the one-time sign-in token
@@ -105,7 +119,7 @@ function clientIp(req: Request): string | undefined {
 
 // ── WorkOS ──────────────────────────────────────────────────────────────────
 class WorkOSError extends Error {
-  constructor(message: string, public status = 502, public code = "") { super(message); }
+  constructor(message: string, public status = 502, public code = "", public body: Record<string, any> = {}) { super(message); }
 }
 
 function apiKey(): string {
@@ -122,7 +136,7 @@ async function workos(path: string, body: Record<string, unknown>, bearer = fals
   });
   let j: Record<string, any> = {};
   try { j = await r.json(); } catch { /* empty body */ }
-  if (!r.ok) throw new WorkOSError(`WorkOS ${path} -> ${r.status}`, r.status, String(j.code || j.error || ""));
+  if (!r.ok) throw new WorkOSError(`WorkOS ${path} -> ${r.status}`, r.status, String(j.code || j.error || ""), j);
   return j;
 }
 
@@ -148,17 +162,48 @@ async function supabaseToken(email: string, meta: Record<string, unknown>, signI
   const mk = await fetch(`${SB_URL}/auth/v1/admin/users`, {
     method: "POST", headers: ADMIN, body: JSON.stringify({ email, email_confirm: true, user_metadata: meta }),
   });
+  await mk.body?.cancel().catch(() => {});
   if (!mk.ok && mk.status !== 422) throw new Error(`could not create the account (${mk.status})`);
-  const gen = await fetch(`${SB_URL}/auth/v1/admin/generate_link`, {
-    method: "POST", headers: ADMIN, body: JSON.stringify({ type: "magiclink", email }),
-  });
-  if (!gen.ok) throw new Error(`could not start the session (${gen.status})`);
-  const link = await gen.json();
+  let link = await magicLink(email);
+  // An account that already existed but whose address nobody ever confirmed
+  // (Supabase's own sign-up, with a password, by anyone who typed this
+  // address): WorkOS has just proved the address, so the account starts
+  // clean. Without this the token would confirm it with the other person's
+  // password and details still on it.
+  const existing = link.user || link;
+  if (mk.status === 422 && !existing.email_confirmed_at && !existing.confirmed_at) {
+    await startClean(existing, meta);
+    link = await magicLink(email);
+  }
   const token_hash = link.hashed_token || link.properties?.hashed_token;
   if (!token_hash) throw new Error("auth returned no token");
   // Before the page exchanges the token, so the new session already carries it.
   if (signIn) await stampSignIn(link.user || link, signIn);
   return { token_hash, type: link.verification_type || link.properties?.verification_type || "magiclink" };
+}
+
+async function magicLink(email: string): Promise<Record<string, any>> {
+  const gen = await fetch(`${SB_URL}/auth/v1/admin/generate_link`, {
+    method: "POST", headers: ADMIN, body: JSON.stringify({ type: "magiclink", email }),
+  });
+  if (!gen.ok) { await gen.body?.cancel().catch(() => {}); throw new Error(`could not start the session (${gen.status})`); }
+  return await gen.json();
+}
+
+// A random password nobody knows (it replaces the unconfirmed one; the
+// fixed tail meets any character-class rule), the address confirmed, and
+// user metadata reduced to what WorkOS says (the auth server merges
+// user_metadata per key; null removes one).
+async function startClean(user: Record<string, any>, meta: Record<string, unknown>): Promise<void> {
+  if (!user?.id) throw new Error("auth returned no account to reset");
+  const clear = Object.fromEntries(Object.keys(user.user_metadata || {}).filter((k) => !(k in meta)).map((k) => [k, null]));
+  const r = await fetch(`${SB_URL}/auth/v1/admin/users/${encodeURIComponent(user.id)}`, {
+    method: "PUT", headers: ADMIN, signal: AbortSignal.timeout(5000),
+    body: JSON.stringify({ password: `${random(36)}aA1!`, email_confirm: true, user_metadata: { ...clear, ...meta } }),
+  });
+  await r.body?.cancel().catch(() => {});
+  if (!r.ok) throw new Error(`could not reset the unconfirmed account (${r.status})`);
+  console.warn("[workos-auth] an unconfirmed account was reset before its first verified sign-in:", user.id);
 }
 
 // ── Account security: two-step verification and sign-in strength ────────────
@@ -177,7 +222,7 @@ const RECENT_SIGN_IN_S = 20 * 60;          // changing two-step needs a sign-in 
 const BRIDGE_HANDOFF_S = 3 * 60;           // bridge stamp -> the page's token exchange
 const SETUP_TTL_MS = 20 * 60_000;          // a scanned secret must be confirmed within this
 
-async function workosCall(method: "GET" | "POST" | "DELETE", path: string, body?: Record<string, unknown>, timeoutMs = 8000): Promise<Record<string, any>> {
+async function workosCall(method: "GET" | "POST" | "PUT" | "DELETE", path: string, body?: Record<string, unknown>, timeoutMs = 8000): Promise<Record<string, any>> {
   const r = await fetch(`${WORKOS}${path}`, {
     method,
     headers: { Authorization: `Bearer ${apiKey()}`, ...(body ? { "Content-Type": "application/json" } : {}) },
@@ -193,6 +238,14 @@ const listFactors = async (workosUserId: string): Promise<Record<string, any>[]>
   const j = await workosCall("GET", `/user_management/users/${encodeURIComponent(workosUserId)}/auth_factors?limit=20`);
   return Array.isArray(j.data) ? j.data : [];
 };
+// The sign-up page's routes skip the hosted page's two-step code: an account
+// with any factor signs in on the hosted page only. "unknown" (the check
+// failed, or an unreadable id) is treated like "two_step": fails closed.
+async function secondStep(workosUserId: string): Promise<"none" | "two_step" | "unknown"> {
+  if (!/^user_[A-Za-z0-9]+$/.test(workosUserId)) return "unknown";
+  try { return (await listFactors(workosUserId)).length > 0 ? "two_step" : "none"; }
+  catch (e) { console.warn("[workos-auth] factor check failed, sending to the hosted page:", (e as Error).message); return "unknown"; }
+}
 // Only the keys given change (the auth server merges app_metadata; null removes a key).
 async function setAppMeta(userId: string, changes: Record<string, unknown>, timeoutMs = 5000): Promise<void> {
   const r = await fetch(`${SB_URL}/auth/v1/admin/users/${encodeURIComponent(userId)}`, {
@@ -499,18 +552,29 @@ async function emailStart(req: Request, origin: string | null): Promise<Response
     if (err.code === "not_configured") return json({ error: "Sign-in is not switched on yet." }, 503, origin);
     return json({ error: "We could not create a code right now. Try again in a minute." }, 502, origin);
   }
-  try {
-    await sendMail(email, codeEmail(String(magic.code || "")));
-  } catch (e) {
-    console.error("[workos-auth] code email failed:", (e as Error).message);
-    return json({ error: "We could not send the code email. Try again in a minute." }, 502, origin);
+  // WorkOS has emailed the code (its Magic Auth email), unless we send ours.
+  if (OWN_CODE_EMAIL) {
+    try {
+      await sendMail(email, codeEmail(String(magic.code || "")));
+    } catch (e) {
+      console.error("[workos-auth] code email failed:", (e as Error).message);
+      return json({ error: "We could not send the code email. Try again in a minute." }, 502, origin);
+    }
   }
   return json({ sent: true, length: 6, expires_in: 600 }, 200, origin);
 }
 
+// A name typed on the sign-up page: no control characters, at most 100 characters.
+const cleanName = (v: unknown) => String(v ?? "").replace(/[\u0000-\u001f\u007f]/g, "").trim().slice(0, 100);
+// reason: "two_step" (the account has a second step) or "hosted" (WorkOS
+// needs its own page for something else, or the check could not be made).
+const useHosted = (reason: "two_step" | "hosted", origin: string | null) =>
+  json({ error: "Please finish on the secure sign-in page.", code: "use_hosted", reason }, 409, origin);
+
 async function emailVerify(req: Request, origin: string | null): Promise<Response> {
   const body = await readJson(req);
   const email = String(body.email || "").trim().toLowerCase();
+  const first = cleanName(body.first_name), last = cleanName(body.last_name);
   let code = String(body.code || "").replace(/\D/g, "");
   if (code.length > 0 && code.length < 6) code = code.padStart(6, "0");   // a lost leading zero
   if (!EMAIL.test(email) || code.length !== 6) return json({ error: "That code didn't match. Use the code from the newest email." }, 400, origin);
@@ -524,6 +588,7 @@ async function emailVerify(req: Request, origin: string | null): Promise<Respons
     const err = e as WorkOSError;
     console.warn("[workos-auth] code refused:", err.message, err.code);
     if (err.code === "not_configured") return json({ error: "Sign-in is not switched on yet." }, 503, origin);
+    if (HOSTED_ONLY.has(err.code)) return useHosted(err.code === "mfa_challenge" ? "two_step" : "hosted", origin);
     return json({ error: "That code didn't match or has expired. Use the code from the newest email, or ask for a new one." }, 400, origin);
   }
   const u = auth.user || {};
@@ -531,8 +596,18 @@ async function emailVerify(req: Request, origin: string | null): Promise<Respons
   if (String(u.email || "").toLowerCase() !== email || u.email_verified !== true) {
     return json({ error: "We couldn't confirm that email address." }, 400, origin);
   }
+  const step = await secondStep(String(u.id || ""));
+  if (step !== "none") return useHosted(step === "two_step" ? "two_step" : "hosted", origin);
+  // The name typed on the page, for a WorkOS account that has none yet (so
+  // WorkOS's emails and dashboard show it too). Best effort.
+  const named = { ...u, first_name: u.first_name || first, last_name: u.last_name || last };
+  if ((first || last) && !u.first_name && !u.last_name) {
+    try {
+      await workosCall("PUT", `/user_management/users/${encodeURIComponent(String(u.id))}`, { ...(first ? { first_name: first } : {}), ...(last ? { last_name: last } : {}) }, 4000);
+    } catch (e) { console.warn("[workos-auth] name not saved at WorkOS:", (e as Error).message); }
+  }
   try {
-    return json(await supabaseToken(email, metaOf(u), { workosUserId: String(u.id || ""), method: String(auth.authentication_method || "MagicAuth") }), 200, origin);
+    return json(await supabaseToken(email, metaOf(named), { workosUserId: String(u.id || ""), method: String(auth.authentication_method || "MagicAuth") }), 200, origin);
   } catch (e) {
     console.error("[workos-auth] supabase sign-in failed:", (e as Error).message);
     return json({ error: "Signed in with WorkOS, but your account could not be opened. Try again." }, 502, origin);
@@ -572,9 +647,11 @@ async function providerReady(provider: string): Promise<boolean> {
 async function providersList(origin: string | null): Promise<Response> {
   const list = (await Promise.all([...PROVIDERS].map(async (p) => (await providerReady(p)) ? p : null))).filter(Boolean);
   // configured: the WorkOS key is set, so a trip can finish (the page checks
-  // this before sending anyone off to WorkOS).
+  // this before sending anyone off to WorkOS). signup_form: the sign-up page's
+  // routes are on (an older bridge says nothing: the page then signs up on
+  // the hosted page instead).
   const configured = !!(Deno.env.get("WORKOS_API_KEY") ?? "").trim();
-  return new Response(JSON.stringify({ providers: list, configured }), {
+  return new Response(JSON.stringify({ providers: list, configured, signup_form: SIGNUP_FORM }), {
     status: 200, headers: { ...cors(origin), "Content-Type": "application/json", "Cache-Control": "private, max-age=60" },
   });
 }
@@ -587,12 +664,16 @@ async function providerStart(url: URL): Promise<Response> {
   // fragment planted in a crafted link must not ride ahead of it.
   try { const r = new URL(redirect); r.hash = ""; if (allowed(r.origin)) { site = r.origin; target = r.toString(); } } catch { /* default */ }
   if (!PROVIDERS.has(provider) || !(await providerReady(provider))) return back(site, "unavailable");
+  return trip(provider, target, url.searchParams.get("screen_hint"), url.searchParams.get("login_hint"));
+}
+
+// Off to WorkOS. The signed cookie remembers the page to come back to, the
+// state, and whether the trip skips the hosted page (d: a direct provider).
+async function trip(provider: string, target: string, screen: string | null, hint: string | null): Promise<Response> {
   const state = random();
-  const payload = b64url(enc.encode(JSON.stringify({ s: state, t: target, e: Date.now() + 30 * 60_000 })));
+  const payload = b64url(enc.encode(JSON.stringify({ s: state, t: target, e: Date.now() + 30 * 60_000, d: provider !== "authkit" })));
   const q = new URLSearchParams({ client_id: CLIENT_ID, redirect_uri: CALLBACK, response_type: "code", provider, state });
-  const hint = url.searchParams.get("login_hint");
-  if (hint && EMAIL.test(hint)) q.set("login_hint", hint);
-  const screen = url.searchParams.get("screen_hint");
+  if (hint && EMAIL.test(hint) && hint.length <= 254) q.set("login_hint", hint);
   if (provider === "authkit" && (screen === "sign-up" || screen === "sign-in")) q.set("screen_hint", screen);
   return new Response(null, {
     status: 302,
@@ -606,14 +687,14 @@ async function providerStart(url: URL): Promise<Response> {
 
 async function providerCallback(req: Request, url: URL): Promise<Response> {
   // Which page started this, from the signed cookie (never from the query string).
-  let target = `${DEFAULT_SITE}/?dashboard`, state = "";
+  let target = `${DEFAULT_SITE}/?dashboard`, state = "", direct = true;
   const raw = cookieOf(req);
   if (raw) {
     const [payload, sig] = raw.split(".");
     if (payload && sig && await safeEqual(sig, await hmac(payload))) {
       try {
         const c = JSON.parse(new TextDecoder().decode(fromB64url(payload)));
-        if (typeof c.t === "string" && typeof c.s === "string" && c.e > Date.now() && allowed(new URL(c.t).origin)) { target = c.t; state = c.s; }
+        if (typeof c.t === "string" && typeof c.s === "string" && c.e > Date.now() && allowed(new URL(c.t).origin)) { target = c.t; state = c.s; direct = c.d !== false; }
       } catch { /* bad cookie: treated as missing */ }
     }
   }
@@ -626,16 +707,23 @@ async function providerCallback(req: Request, url: URL): Promise<Response> {
   if (!state) return done(back(site, "expired"));
   if (!code || !sent || !(await safeEqual(sent, state))) return done(back(site, "workos"));
   let auth: Record<string, any>;
+  // A direct trip (the sign-up page's Google / Microsoft) that WorkOS or the
+  // account says needs the hosted page: straight on to the hosted sign-in,
+  // same page to come back to. Its new cookie replaces this trip's.
+  const hosted = (hint: unknown) => trip("authkit", target, "sign-in", typeof hint === "string" ? hint.trim().toLowerCase() : null);
   try {
     auth = await authenticate({ grant_type: "authorization_code", code, ...(clientIp(req) ? { ip_address: clientIp(req) } : {}), user_agent: (req.headers.get("user-agent") ?? "").slice(0, 400) });
   } catch (e) {
-    console.warn("[workos-auth] provider sign-in refused:", (e as Error).message, (e as WorkOSError).code);
-    return done(back(site, (e as WorkOSError).code === "not_configured" ? "unavailable" : "workos"));
+    const err = e as WorkOSError;
+    console.warn("[workos-auth] provider sign-in refused:", err.message, err.code);
+    if (direct && HOSTED_ONLY.has(err.code)) return hosted(err.body?.user?.email ?? err.body?.email);
+    return done(back(site, err.code === "not_configured" ? "unavailable" : "workos"));
   }
   const u = auth.user || {};
   await endWorkosSession(auth.access_token);
   const email = String(u.email || "").trim().toLowerCase();
   if (!EMAIL.test(email) || u.email_verified !== true) return done(back(site, "unverified"));
+  if (direct && await secondStep(String(u.id || "")) !== "none") return hosted(email);
   try {
     const t = await supabaseToken(email, metaOf(u), { workosUserId: String(u.id || ""), method: String(auth.authentication_method || "") });
     const sep = target.includes("#") ? "&" : "#";
@@ -656,7 +744,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
 
   if (req.method === "GET" && path === "/providers") return providersList(allowed(origin) ? origin : null);
   if (req.method === "GET" && path === "/start") {
-    if (!DIRECT_ROUTES && url.searchParams.get("provider") !== "authkit") {
+    if (!SIGNUP_FORM && url.searchParams.get("provider") !== "authkit") {
       let site = DEFAULT_SITE;
       try { const o = new URL(url.searchParams.get("redirect") ?? "").origin; if (allowed(o)) site = o; } catch { /* default */ }
       return back(site, "unavailable");
@@ -672,7 +760,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
     return security(req, path, origin);
   }
 
-  if ((path === "/email/start" || path === "/email/verify") && !DIRECT_ROUTES) return json({ error: "not found" }, 404, allowed(origin) ? origin : null);
+  if ((path === "/email/start" || path === "/email/verify") && !SIGNUP_FORM) return json({ error: "not found" }, 404, allowed(origin) ? origin : null);
   if (path === "/email/start" || path === "/email/verify") {
     if (!allowed(origin)) return json({ error: "origin not allowed" }, 403, null);
     if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: cors(origin) });
