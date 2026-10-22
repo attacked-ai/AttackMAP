@@ -6,7 +6,8 @@
 // tier) → light body with an editable details card + quick links.
 //
 // Editable basics persist via saveProfileBasics() (full_name, role=job title,
-// country). Email + tier are read-only. Anonymous visitors bounce home.
+// country). Tier is read-only; the email address is shown (read-only) in the
+// Login card of SecurityPanel. Anonymous visitors bounce home.
 // ─────────────────────────────────────────────────────────────────────────
 import React, { useEffect, useRef, useState } from "react";
 import { useAuth } from "./AuthProvider";
@@ -222,10 +223,9 @@ export function ProfilePage() {
           </div>
         </form>
 
-        {/* Account info (read-only) */}
+        {/* Membership (read-only). The email address lives in the Login card below. */}
         <div style={{ marginTop: 22, background: C.paper, border: `1px solid ${C.line}`, borderRadius: 12, padding: "20px 24px" }}>
-          <h2 style={{ margin: "0 0 6px", fontSize: 14, fontWeight: 800, color: C.ink }}>Account</h2>
-          <ReadRow k="Email" v={user.email} />
+          <h2 style={{ margin: "0 0 6px", fontSize: 14, fontWeight: 800, color: C.ink }}>Membership</h2>
           <ReadRow k="Access tier" v={`${tier || "free"}`} />
           <ReadRow k="Function" v={meta.job_function} />
           {memberSince && <ReadRow k="Member since" v={memberSince} />}

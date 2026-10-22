@@ -132,7 +132,7 @@ export function SiteNav({ active }) {
                       </div>
                       <a href="/?dashboard" className="is-primary">My dashboard</a>
                       <a href="/?profile">Profile</a>
-                      {WORKOS && <a href="/?profile#security" onClick={() => setMenuOpen(false)}>Security</a>}
+                      {WORKOS && <a href="/?profile#security" onClick={() => setMenuOpen(false)}>Login and security</a>}
                       <a href="/?subscribe">Subscription</a>
                       <button onClick={() => { setMenuOpen(false); enterMap(); }}>Open the live map</button>
                       <a href="/?hub">The Attacked Hub</a>

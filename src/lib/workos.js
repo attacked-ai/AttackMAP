@@ -107,6 +107,7 @@ export function startProvider(id, back, answers = null) {
 // given for the trip carry the same nonce, so they are only ever saved onto
 // the account this trip signs in; a trip without answers drops any left over.
 const TRIP = "attacked.wosTrip";
+const SECTION = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;   // a section to land on (wos_h): a plain element id, nothing else
 function tripBack(back, answers = null) {
   const n = Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, "0")).join("");
   try { sessionStorage.setItem(TRIP, JSON.stringify({ n, at: Date.now() })); } catch { /* storage blocked: the return is refused */ }
@@ -114,8 +115,12 @@ function tripBack(back, answers = null) {
     if (answers) sessionStorage.setItem(PENDING, JSON.stringify({ fields: answers, n, at: Date.now() }));
     else sessionStorage.removeItem(PENDING);
   } catch { /* storage blocked: the answers are asked again */ }
-  const base = String(back || `${window.location.origin}/?dashboard`).split("#")[0];
-  return `${base}${base.includes("?") ? "&" : "?"}wos_n=${n}`;
+  // The bridge drops any fragment from the return address (its callback adds
+  // its own), so a section to land on, as in /?profile#security, rides along
+  // as wos_h and takeReturn() puts it back as the hash.
+  const [base, frag = ""] = String(back || `${window.location.origin}/?dashboard`).split("#");
+  const section = SECTION.test(frag) ? `&wos_h=${frag}` : "";
+  return `${base}${base.includes("?") ? "&" : "?"}wos_n=${n}${section}`;
 }
 
 // A trip lands on the page with ?…&wos_n=… and #wos_token=…&wos_type=…. Take
@@ -125,12 +130,13 @@ export function takeReturn() {
   if (typeof window === "undefined") return null;
   const h = new URLSearchParams(window.location.hash.replace(/^#/, ""));
   const tokens = h.getAll("wos_token");
-  const n = new URLSearchParams(window.location.search).get("wos_n");
+  const qs = new URLSearchParams(window.location.search);
+  const n = qs.get("wos_n"), section = qs.get("wos_h") || "";
   if (!tokens.length && !n) return null;
   const type = h.get("wos_type") || "magiclink";
   h.delete("wos_token"); h.delete("wos_type");
-  const search = window.location.search.replace(/([?&])wos_n=[^&]*&?/, "$1").replace(/[?&]$/, "");
-  const rest = h.toString();
+  const search = window.location.search.replace(/([?&])wos_n=[^&]*&?/, "$1").replace(/([?&])wos_h=[^&]*&?/, "$1").replace(/[?&]$/, "");
+  const rest = h.toString() || (SECTION.test(section) ? section : "");   // the section the trip was to land on
   window.history.replaceState(null, "", window.location.pathname + search + (rest ? `#${rest}` : ""));
   let trip = null;
   try { trip = JSON.parse(sessionStorage.getItem(TRIP) || "null"); sessionStorage.removeItem(TRIP); } catch { /* storage blocked */ }
@@ -158,12 +164,18 @@ export function clearPending() {
   try { sessionStorage.removeItem(PENDING); } catch { /* storage blocked */ }
 }
 
-// Account security — two-step verification (an authenticator-app code) — as
-// the signed-in reader, through the bridge's /security routes. The reader's
+// Account security — "Login and security" on the Profile page — as the
+// signed-in reader, through the bridge's /security routes. The reader's
 // Supabase access token proves who is asking; WorkOS keeps the factor and asks
-// for its code on the sign-in page. Paths: "" (status), "/totp/start",
-// "/totp/confirm" {setup, code}, "/totp/remove" {code}. Errors carry the
-// bridge's code ("reauth": sign in again first; "no_workos").
+// for its code on the sign-in page. Paths (GET when body is null, else POST):
+//   ""                 status, the light form the reminder card uses
+//   "?full=1"          status plus login.identities and login.methods, for the
+//                      Linked accounts row (one extra WorkOS call; page only)
+//   "/totp/start" {}, "/totp/confirm" {setup, code}, "/totp/remove" {code}
+//   "/password" {password, code?}   set or change the WorkOS password; code
+//                      only when two-step is on (bridge v8 and later)
+// Errors carry the bridge's code ("reauth": sign in again first; "no_workos";
+// "state_changed"; "weak_password"; "code_required").
 export async function securityApi(path = "", body = null) {
   const { supabase } = await import("./supabaseClient");
   const { data } = await supabase.auth.getSession();

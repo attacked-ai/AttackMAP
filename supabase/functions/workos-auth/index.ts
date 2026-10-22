@@ -18,9 +18,11 @@
 //   GET  /workos-auth/start?provider=GoogleOAuth&redirect=<page URL>   -> the provider
 //   GET  /workos-auth/callback                        -> <page URL>#wos_token=…
 //   GET  /workos-auth/security                        -> the signed-in reader's two-step status
+//   GET  /workos-auth/security?full=1                 -> status + linked accounts (the Login and security page)
 //   POST /workos-auth/security/totp/start             -> QR code + key for an authenticator app
 //   POST /workos-auth/security/totp/confirm  {setup, code}   -> two-step on
 //   POST /workos-auth/security/totp/remove   {code}          -> two-step off
+//   POST /workos-auth/security/password      {password, code?} -> set or change the WorkOS password
 //   (security routes: Authorization: Bearer <the reader's Supabase access token>;
 //    changes need a sign-in in the last 20 minutes)
 //
@@ -217,10 +219,17 @@ async function startClean(user: Record<string, any>, meta: Record<string, unknow
 // Each sign-in records app_metadata.auth_method (Passkey, Password, MagicAuth,
 // GoogleOAuth, …) and strong_auth — true only for a passkey, the one method
 // WorkOS documents as covering both steps. app_metadata is service-role only.
+// The Login and security page (GET /security?full=1) also lists the reader's
+// linked accounts: WorkOS's identities list, read-only (WorkOS has no unlink),
+// plus the methods seen at sign-in (app_metadata.methods_used). A password is
+// set or changed with PUT /user_management/users/{id} behind the same
+// recent-sign-in gate, plus the authenticator code when two-step is on, and
+// at most once a minute per account.
 const TOTP_ISSUER = "Attacked.ai";
 const RECENT_SIGN_IN_S = 20 * 60;          // changing two-step needs a sign-in this recent
 const BRIDGE_HANDOFF_S = 3 * 60;           // bridge stamp -> the page's token exchange
 const SETUP_TTL_MS = 20 * 60_000;          // a scanned secret must be confirmed within this
+const PASSWORD_CHANGE_GAP_MS = 60_000;     // one password change per account per minute
 
 async function workosCall(method: "GET" | "POST" | "PUT" | "DELETE", path: string, body?: Record<string, unknown>, timeoutMs = 8000): Promise<Record<string, any>> {
   const r = await fetch(`${WORKOS}${path}`, {
@@ -255,12 +264,24 @@ async function setAppMeta(userId: string, changes: Record<string, unknown>, time
   if (!r.ok) throw new Error(`could not update the account (${r.status})`);
 }
 // Never blocks a sign-in: a failure only leaves the old marks in place.
+// methods_used accumulates every method this reader has signed in with (the
+// Login card's linked-account rows: WorkOS's own identities list is empty for
+// readers who linked Google to an email-code account). Last 10, in the order
+// first seen; an impersonation sign-in is never added. An account stamped
+// before this list existed starts it from the auth_method already recorded,
+// so the method it used last (say Google) is not forgotten at this sign-in.
 async function stampSignIn(user: Record<string, any>, s: { workosUserId: string; method: string }): Promise<void> {
   try {
     if (!user?.id) return;
+    const am = user.app_metadata || {};
+    const prior: unknown[] = Array.isArray(am.methods_used) ? am.methods_used
+      : (typeof am.auth_method === "string" && am.auth_method !== "Impersonation" ? [am.auth_method] : []);
+    const seen: string[] = prior.filter((m: unknown): m is string => typeof m === "string" && !!m);
+    const methods_used = s.method && s.method !== "Impersonation" ? [...new Set([...seen, s.method])].slice(-10) : null;
     await setAppMeta(user.id, {
       workos_user_id: s.workosUserId || null, auth_method: s.method || null,
       strong_auth: s.method === "Passkey", signed_in_at: s.method === "Impersonation" ? null : new Date().toISOString(),
+      ...(methods_used ? { methods_used } : {}),
     }, 2500);
   } catch (e) { console.warn("[workos-auth] sign-in not stamped:", (e as Error).message); }
 }
@@ -386,22 +407,32 @@ async function verifyWithWorkos(factorId: string, code: string): Promise<boolean
   const v = await workosCall("POST", `/auth/challenges/${encodeURIComponent(String(ch.id))}/verify`, { code });
   return v.valid === true;
 }
-// Best effort: tells the reader their two-step setting changed. Waits at most
-// 4 s for the mail server; the send carries on in the background after that.
-async function tellReaderSoon(email: string, on: boolean): Promise<void> {
-  const p = tellReader(email, on);
+// Best effort: tells the reader their two-step setting changed (true / false)
+// or their password was set or changed ("password"). Waits at most 4 s for the
+// mail server; the send carries on in the background after that.
+async function tellReaderSoon(email: string, what: boolean | "password"): Promise<void> {
+  const p = tellReader(email, what);
   try { (globalThis as any).EdgeRuntime?.waitUntil?.(p); } catch { /* not on the edge runtime */ }
   await Promise.race([p, new Promise((r) => setTimeout(r, 4000))]);
 }
-async function tellReader(email: string, on: boolean): Promise<void> {
-  const what = on ? "turned on" : "turned off";
-  try {
-    await sendMail(email, {
-      subject: `Two-step verification ${what} for your Attacked.ai account`,
-      text: `Two-step verification was ${what} for your Attacked.ai account just now.\n\nIf this was you, there is nothing to do. If it wasn't, sign in and check Profile > Security, and contact the Attacked.ai team.`,
-      html: `<p>Two-step verification was <strong>${what}</strong> for your Attacked.ai account just now.</p><p>If this was you, there is nothing to do. If it wasn't, sign in and check <strong>Profile &rarr; Security</strong>, and contact the Attacked.ai team.</p>`,
-    });
-  } catch (e) { console.warn("[workos-auth] change email not sent:", (e as Error).message); }
+async function tellReader(email: string, what: boolean | "password"): Promise<void> {
+  let msg: { subject: string; text: string; html: string };
+  if (what === "password") {
+    msg = {
+      subject: "Your Attacked.ai password was changed",
+      text: "Your Attacked.ai password was set or changed just now.\n\nIf this was you, there is nothing to do. If it wasn't, sign in, go to Profile > Login and security, sign out everywhere else and set a new password, and contact the Attacked.ai team.",
+      html: "<p>Your Attacked.ai password was set or changed just now.</p><p>If this was you, there is nothing to do. If it wasn't, sign in, go to <strong>Profile &rarr; Login and security</strong>, sign out everywhere else and set a new password, and contact the Attacked.ai team.</p>",
+    };
+  } else {
+    const state = what ? "turned on" : "turned off";
+    msg = {
+      subject: `Two-step verification ${state} for your Attacked.ai account`,
+      text: `Two-step verification was ${state} for your Attacked.ai account just now.\n\nIf this was you, there is nothing to do. If it wasn't, sign in and check Profile > Login and security, and contact the Attacked.ai team.`,
+      html: `<p>Two-step verification was <strong>${state}</strong> for your Attacked.ai account just now.</p><p>If this was you, there is nothing to do. If it wasn't, sign in and check <strong>Profile &rarr; Login and security</strong>, and contact the Attacked.ai team.</p>`,
+    };
+  }
+  try { await sendMail(email, msg); }
+  catch (e) { console.warn("[workos-auth] change email not sent:", (e as Error).message); }
 }
 
 async function security(req: Request, path: string, origin: string | null): Promise<Response> {
@@ -416,9 +447,13 @@ async function security(req: Request, path: string, origin: string | null): Prom
   const email = String(user.email).toLowerCase();
   const am: Record<string, any> = user.app_metadata || {};
   const recent = Date.now() / 1000 - r.signedInAt < RECENT_SIGN_IN_S;
-  const view = { method: am.auth_method || null, strong: am.strong_auth === true, recent };
+  const view = { method: am.auth_method || null, strong: am.strong_auth === true, recent,
+                 signed_in_at: am.signed_in_at || null, password_set_at: am.password_set_at || null };
   // Changes need a recent sign-in through the bridge; checked first, before any WorkOS call.
-  if (path !== "/security" && !recent) return json({ error: "For your safety, sign in again before changing two-step verification.", code: "reauth" }, 403, origin);
+  if (path !== "/security" && !recent) return json({
+    error: path === "/security/password" ? "For your safety, sign in again before changing your password."
+                                          : "For your safety, sign in again before changing two-step verification.",
+    code: "reauth" }, 403, origin);
   try {
     const wu = await workosUserFor(user, path !== "/security");
     if (!wu) {
@@ -429,7 +464,23 @@ async function security(req: Request, path: string, origin: string | null): Prom
     const factor = factors.find((f) => f.id === am.mfa_factor_id) || factors[0] || null;
     if (path === "/security") {
       const since = factor ? (factor.id === am.mfa_factor_id && am.mfa_since) || factor.created_at || null : null;
-      return json({ workos: true, totp: { on: !!factor, since }, ...view }, 200, origin);
+      // ?full=1 (the Login and security page; the site-wide nudge never asks):
+      // the methods this reader has signed in with, and WorkOS's identities
+      // list, read-only and best effort (null when it cannot be read: a thrown
+      // error here would turn the whole status into a 502). idp_id is dropped.
+      let login: { identities: { provider: string }[] | null; methods: string[] } | undefined;
+      if (new URL(req.url).searchParams.get("full") === "1") {
+        const methods: string[] = (Array.isArray(am.methods_used) ? am.methods_used : (am.auth_method ? [am.auth_method] : []))
+          .filter((m: unknown) => typeof m === "string" && /^[A-Za-z]+$/.test(m));
+        let identities: { provider: string }[] | null;
+        try {
+          const j = await workosCall("GET", `/user_management/users/${encodeURIComponent(wu.id)}/identities`, undefined, 4000);
+          const list: any[] = Array.isArray(j) ? j : (Array.isArray((j as any).data) ? (j as any).data : []);   // bare array per the reference; {data} tolerated
+          identities = list.map((i) => ({ provider: String(i?.provider || "") })).filter((i) => /^[A-Za-z]+$/.test(i.provider));
+        } catch (e) { console.warn("[workos-auth] identities not listed:", (e as Error).message); identities = null; }
+        login = { identities, methods };
+      }
+      return json({ workos: true, totp: { on: !!factor, since }, ...view, ...(login ? { login } : {}) }, 200, origin);
     }
     const body = await readJson(req);
 
@@ -457,6 +508,33 @@ async function security(req: Request, path: string, origin: string | null): Prom
       const made = await workosCall("POST", `/user_management/users/${encodeURIComponent(wu.id)}/auth_factors`, { type: "totp", totp_issuer: TOTP_ISSUER, totp_user: email, totp_secret: secret });
       const f = made.authentication_factor || {};
       if (!f.id) throw new Error("WorkOS returned no factor");
+      // Verify the new factor at WorkOS too (challenge + verify, same code), so
+      // WorkOS holds it as a verified factor exactly as a hosted-page enrolment
+      // would. Any failure deletes it again: never a half-made factor, and no
+      // extra attempt is used (the one above covers this code). If that delete
+      // fails as well, the factor is live at WorkOS whatever we say: note it on
+      // the account, tell the reader, and answer "already on" so the page shows
+      // the truth (the reader can turn it off with the same app entry).
+      const dropFactor = async (why: string): Promise<boolean> => {
+        try { await workosCall("DELETE", `/auth/factors/${encodeURIComponent(String(f.id))}`); return true; }
+        catch (e2) { console.warn("[workos-auth] unverified factor not deleted:", String(f.id), why, (e2 as Error).message); return false; }
+      };
+      const keepFactor = async (): Promise<Response> => {
+        try { await setAppMeta(user.id, { mfa_factor_id: f.id, mfa_since: new Date().toISOString() }); }
+        catch (e2) { console.warn("[workos-auth] factor left at WorkOS, not noted on the account:", (e2 as Error).message); }
+        await tellReaderSoon(email, true);
+        return json({ error: "Two-step verification is already on.", code: "state_changed" }, 409, origin);
+      };
+      let verified = false;
+      try { verified = await verifyWithWorkos(String(f.id), code); }
+      catch (e) { if (await dropFactor("challenge failed")) throw e; return keepFactor(); }
+      if (!verified) {
+        // The code was right by our own check (the secret is ours), so this is
+        // WorkOS's clock window, not a guess: it costs no attempt.
+        await clearAttempts(user.id);
+        if (!(await dropFactor("code not accepted"))) return keepFactor();
+        return json({ error: "That code has just expired. Type the next code the app shows and try again." }, 400, origin);
+      }
       await clearAttempts(user.id);
       try { await setAppMeta(user.id, { mfa_factor_id: f.id, mfa_since: new Date().toISOString() }); }
       catch (e) { console.warn("[workos-auth] factor saved at WorkOS, not noted on the account:", (e as Error).message); }
@@ -474,6 +552,44 @@ async function security(req: Request, path: string, origin: string | null): Prom
       try { await setAppMeta(user.id, { mfa_factor_id: null, mfa_since: null }); } catch { /* status reads WorkOS */ }
       await tellReaderSoon(email, false);
       return json({ totp: { on: false } }, 200, origin);
+    }
+    // Set or change the WorkOS password. The address is always the session's
+    // verified email (nothing in the body chooses the account). Cheap local
+    // checks first; when two-step is on, a live authenticator code is checked
+    // through the shared attempt counter (step-up); then the one WorkOS write.
+    // WorkOS has no current-password check: the recent-sign-in gate above and
+    // the step-up are the substitute, and the reader is emailed about it.
+    // One change a minute per account (password_set_at is service-role only):
+    // every change is a WorkOS write and an email from the shared sender, so
+    // a signed-in script must not be able to run either dry for everyone.
+    // The password is never logged or echoed.
+    if (path === "/security/password") {
+      const pw = body.password;
+      if (typeof pw !== "string" || pw.length < 10) return json({ error: "Use at least 10 characters.", code: "weak_password" }, 400, origin);
+      if (pw.length > 128) return json({ error: "That password is too long (128 characters at most).", code: "weak_password" }, 400, origin);
+      const low = pw.toLowerCase(), local = email.split("@")[0];
+      if (low.includes(email) || (local.length >= 4 && low.includes(local))) return json({ error: "Don't use your email address in your password.", code: "weak_password" }, 400, origin);
+      const lastSet = Date.parse(String(am.password_set_at || ""));
+      if (Number.isFinite(lastSet) && Date.now() - lastSet < PASSWORD_CHANGE_GAP_MS) return json({ error: "Too many changes in a short time. Wait a minute, then try again." }, 429, origin);
+      if (factor) {
+        const code = sixDigits(body.code);
+        if (!code) return json({ error: "Two-step verification is on, so type the current code from your authenticator app too.", code: "code_required" }, 400, origin);
+        if (!(await reserveAttempt(user.id))) return json({ error: "Too many wrong codes. Wait 10 minutes, then try again." }, 429, origin);
+        if (!(await verifyWithWorkos(factor.id, code))) return json({ error: "That code didn't match. Use the newest code in the app." }, 400, origin);
+        await clearAttempts(user.id);
+      }
+      try { await workosCall("PUT", `/user_management/users/${encodeURIComponent(wu.id)}`, { password: pw }); }
+      catch (e) {
+        const s = (e as WorkOSError).status;
+        if (s === 400 || s === 422) return json({ error: "That password is too easy to guess. Try a longer phrase that isn't a common word, your name or your email.", code: "weak_password" }, 400, origin);
+        if (s === 429) return json({ error: "Too many changes in a short time. Wait a minute, then try again." }, 429, origin);
+        throw e;   // the catch below: 502
+      }
+      try { await setAppMeta(user.id, { password_set_at: new Date().toISOString() }); }
+      catch (e) { console.warn("[workos-auth] password set at WorkOS, not noted on the account:", (e as Error).message); }
+      await tellReaderSoon(email, "password");
+      console.log("[workos-auth] password set");
+      return json({ password: { set: true } }, 200, origin);
     }
     return json({ error: "not found" }, 404, origin);
   } catch (e) {

@@ -1,88 +1,139 @@
 // ─────────────────────────────────────────────────────────────────────────
-// SecurityPanel — "Security" on the Profile page (?profile#security).
+// SecurityPanel — "Login and security" on the Profile page (?profile#security).
 //
-// Two-step verification: a 6-digit code from an authenticator app (Google
-// Authenticator, Microsoft Authenticator, 1Password, …). Turned on here — scan
-// a QR code, confirm one code — and WorkOS then asks for a code on its sign-in
-// page. Turning it on or off needs a recent sign-in and a correct code.
-// Passkeys are created on the WorkOS sign-in page itself (WorkOS has no API
-// for them); this explains how, and shows when the last sign-in used one.
-// The bridge (supabase/functions/workos-auth, /security routes) does the work;
-// shown only with WorkOS sign-in switched on.
+// Two cards, after the shape of MongoDB's Login and Security page:
+//   Login — email (read-only), password (set or change, in-page), linked
+//           accounts (read-only: WorkOS has no unlink), last sign-in,
+//           signed-in devices ("sign out everywhere else", Supabase only).
+//   Two-step verification — Passkey and Authenticator app rows, each with a
+//           "Set up". Optional, never forced; switched off here at any time.
+// The bridge (supabase/functions/workos-auth, /security routes) does the
+// work. GET /security?full=1 is the only status request; the presence of its
+// `signed_in_at` key tells the page the bridge is new enough (v8) for the
+// password route and the linked-accounts list. Shown only with WorkOS
+// sign-in switched on. State and handlers live here; src/auth/security/
+// holds the tokens, icons and the two cards.
 // ─────────────────────────────────────────────────────────────────────────
 import React, { useEffect, useRef, useState } from "react";
 import { useAuth } from "./AuthProvider";
 import { WORKOS, securityApi, startHosted } from "../lib/workos";
+import { C, card, btn } from "./security/tokens";
+import { LoginCard } from "./security/LoginCard";
+import { TwoStepCard } from "./security/TwoStepCard";
 
-const C = {
-  paper: "#FFFFFF", paper2: "#FAFAFA", ink: "#101010", ink2: "#52525B", ink3: "#6A6A6A",
-  line: "#E7E7E9", line2: "#CFCDC4", gold: "#FCBD00", goldDeep: "#8A6D00",
-  obsidian: "#1A1A1A", err: "#C0341D", ok: "#1E7A3D", okBg: "#EAF6EE", warnBg: "#FFF7DD",
-};
-const FONT = "Inter, sans-serif";
-const MONO = "'JetBrains Mono', ui-monospace, monospace";
-const card = { marginTop: 22, background: C.paper, border: `1px solid ${C.line}`, borderRadius: 12, padding: "22px 24px" };
-const h3 = { margin: "0 0 6px", fontSize: 15, fontWeight: 800, color: C.ink, letterSpacing: "-0.01em", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", outline: "none" };
-const p = { margin: "0 0 12px", fontSize: 13.5, lineHeight: 1.6, color: C.ink2 };
-const btn = (primary, disabled) => ({
-  padding: "11px 18px", background: primary ? C.gold : "transparent", color: C.obsidian,
-  border: primary ? "none" : `1px solid ${C.line2}`, borderRadius: 4, cursor: disabled ? "not-allowed" : "pointer", opacity: disabled ? 0.5 : 1,
-  fontFamily: FONT, fontSize: 12, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase",
-});
-const pill = (on) => ({
-  fontSize: 10.5, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", padding: "3px 8px", borderRadius: 999,
-  background: on ? C.okBg : "#F1F1F2", color: on ? C.ok : C.ink3,
-});
-const codeInput = { width: 150, padding: "11px 12px", border: `1px solid ${C.line2}`, borderRadius: 4, fontFamily: MONO, fontSize: 18, letterSpacing: "0.3em", textAlign: "center", color: C.ink, background: "#fff" };
-const fmtDate = (iso) => { try { return new Date(iso).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }); } catch { return ""; } };
-const METHOD = { Passkey: "a passkey", Password: "your password", MagicAuth: "an email code", GoogleOAuth: "Google", MicrosoftOAuth: "Microsoft", SSO: "single sign-on" };
-const finePointer = () => { try { return window.matchMedia("(pointer: fine)").matches; } catch { return true; } };
+const EMPTY_PW = { a: "", b: "", code: "", show: false };
 
 export function SecurityPanel() {
-  const { tier, signOut } = useAuth();
-  const [status, setStatus] = useState(null);      // { workos, totp: { on, since }, method, strong, recent }
+  const { user, tier, signOut } = useAuth();
+  const [status, setStatus] = useState(null);      // { workos, totp: { on, since }, method, strong, recent, signed_in_at?, password_set_at?, login? }
   const [loadErr, setLoadErr] = useState(null);    // { text, reauth }
-  const [step, setStep] = useState("idle");        // idle | setup | remove
+  const [step, setStep] = useState("idle");        // idle | setup | remove | password | passkeyHelp
   const [setup, setSetup] = useState(null);        // { setup, secret, uri, qr }
   const [code, setCode] = useState("");
   const [busy, setBusy] = useState(null);          // which action is running
-  const [msg, setMsg] = useState(null);            // { ok, text, reauth }
+  const [msg, setMsg] = useState(null);            // { ok, text, reauth } — the two-step card's status line
   const [copy, setCopy] = useState(null);          // "ok" | "failed"
-  const titleRef = useRef(null);
+  const [pwForm, setPwForm] = useState(EMPTY_PW);  // { a, b, code, show }
+  const [pwMsg, setPwMsg] = useState(null);        // { ok, text, reauth } — the password row
+  const [others, setOthers] = useState("idle");    // idle | confirm | busy | done | error
+  const [passkeyInfo, setPasskeyInfo] = useState(false);
+  const [retry, setRetry] = useState(null);        // linked accounts "Try again": null | "busy" | "done"
+  const titleRef = useRef(null);                   // the two-step card's h3
+  const flowRef = useRef(null);                    // heading of the open flow (passkey panel, set-up form)
+  const pwRef = useRef(null);                      // heading of the password form
+  const trigger = useRef(null);                    // id of the row button that opened the current form or panel
+  const othersBusy = useRef(false);                // one "sign out others" call at a time
+  const booted = useRef(false);
 
-  const load = () => securityApi("").then((s) => { setStatus(s); setLoadErr(null); }).catch((e) => setLoadErr({ text: e.message, reauth: e.code === "reauth" }));
-  useEffect(() => { if (WORKOS) load(); }, []);
+  const load = () => securityApi("?full=1").then((s) => { setStatus(s); setLoadErr(null); }).catch((e) => setLoadErr({ text: e.message, reauth: e.code === "reauth" }));
+  useEffect(() => { if (booted.current) return; booted.current = true; if (WORKOS) load(); }, []);
   useEffect(() => {
     if (window.location.hash === "#security") setTimeout(() => document.getElementById("security")?.scrollIntoView({ behavior: "smooth", block: "start" }), 300);
   }, []);
-  useEffect(() => { if (step !== "idle") titleRef.current?.focus(); }, [step]);
+  // Opening a form or panel moves focus to its heading; closing it (Cancel,
+  // Close, Save, Keep it on) returns focus to the row button that opened it,
+  // so a keyboard reader is never dropped at the top of the document.
+  useEffect(() => {
+    if (step === "idle") {
+      const id = trigger.current; trigger.current = null;
+      if (id) document.getElementById(id)?.focus();
+      return;
+    }
+    const el = (step === "password" ? pwRef.current : flowRef.current) || titleRef.current;
+    el?.focus();
+  }, [step]);
+  const remember = () => { const a = document.activeElement; trigger.current = a && a.id ? a.id : null; };
 
-  const run = async (name, fn) => {
-    setBusy(name); setMsg(null);
+  const loading = !status && !loadErr;
+  const noWorkos = !!status && status.workos === false;
+  const v8 = !!status && "signed_in_at" in status;                 // bridge ≥ 8: password route + linked accounts
+  const hasPassword = !!(status && (status.password_set_at || status.method === "Password"));
+  const on = !!(status && status.totp && status.totp.on);
+  const bridgeOff = noWorkos || !!loadErr;                          // bridge-backed buttons render disabled
+  const disabledTitle = noWorkos ? "Sign in with the Attacked.ai sign-in page first" : "Security settings couldn't be loaded. Try again above.";
+
+  const run = async (name, fn, report = setMsg) => {
+    setBusy(name); report(null);
     try { await fn(); }
     catch (e) {
       // Changed in another tab or device meanwhile: show what is true now.
       if (e.code === "state_changed") { setStep("idle"); setSetup(null); setCode(""); load(); }
-      setMsg({ ok: false, text: e.message, reauth: e.code === "reauth" || e.code === "no_workos" });
+      // Two-step was switched on elsewhere after this page loaded: the password
+      // form stays open with what was typed and gains its code field.
+      if (e.code === "code_required") { setStatus((s) => ({ ...s, totp: { ...(s && s.totp), on: true } })); load(); }
+      report({ ok: false, text: e.message, reauth: e.code === "reauth" || e.code === "no_workos" });
     }
     finally { setBusy(null); }
   };
-  const start = () => run("start", async () => { setSetup(await securityApi("/totp/start", {})); setCode(""); setCopy(null); setStep("setup"); });
+  const start = () => { remember(); run("start", async () => { setSetup(await securityApi("/totp/start", {})); setCode(""); setCopy(null); setStep("setup"); }); };
   const confirm = (e) => { e.preventDefault(); run("confirm", async () => {
     await securityApi("/totp/confirm", { setup: setup.setup, code });
-    setStatus((s) => ({ ...s, totp: { on: true, since: new Date().toISOString() } }));
+    setStatus((s) => ({ ...s, totp: { ...(s && s.totp), on: true, since: new Date().toISOString() } }));
     setStep("idle"); setSetup(null); setCode("");
     setMsg({ ok: true, text: "Two-step verification is on. Next time you sign in on the Attacked.ai sign-in page, it will ask for a code from your app." });
     load();
   }); };
   const remove = (e) => { e.preventDefault(); run("remove", async () => {
     await securityApi("/totp/remove", { code });
-    setStatus((s) => ({ ...s, totp: { on: false, since: null } }));
+    setStatus((s) => ({ ...s, totp: { ...(s && s.totp), on: false, since: null } }));
     setStep("idle"); setCode("");
     setMsg({ ok: true, text: "Two-step verification is off." });
     load();
   }); };
-  const cancel = () => { setStep("idle"); setSetup(null); setCode(""); setMsg(null); };
+  const openRemove = () => { remember(); setStep("remove"); setSetup(null); setCode(""); setMsg(null); };
+  const togglePasskey = () => { if (step !== "passkeyHelp") remember(); setSetup(null); setCode(""); setMsg(null); setStep((s) => (s === "passkeyHelp" ? "idle" : "passkeyHelp")); };
+  const openPassword = () => { remember(); setSetup(null); setCode(""); setMsg(null); setPwForm(EMPTY_PW); setPwMsg(null); setStep("password"); };
+  const cancel = () => {
+    if (step === "password") { setPwForm(EMPTY_PW); setPwMsg(null); }
+    else { setSetup(null); setCode(""); setMsg(null); }
+    setStep("idle");
+  };
+  const savePassword = (e) => {
+    e.preventDefault();
+    const { a, b, code: c } = pwForm;
+    if (a.length < 10) { setPwMsg({ ok: false, text: "Use at least 10 characters." }); return; }
+    if (a !== b) { setPwMsg({ ok: false, text: "The two passwords don't match." }); return; }
+    run("password", async () => {
+      await securityApi("/password", { password: a, ...(on ? { code: c } : {}) });
+      setStatus((s) => ({ ...s, password_set_at: new Date().toISOString() }));
+      setStep("idle"); setPwForm(EMPTY_PW);
+      setPwMsg({ ok: true, text: "Password saved. Use it with your email on the Attacked.ai sign-in page." });
+      load();
+    }, setPwMsg);
+  };
+  // Supabase ends every other session for this reader and keeps this one.
+  // No SIGNED_OUT event fires for scope "others": only the result counts.
+  const signOutOthers = async () => {
+    if (othersBusy.current) return;   // one call per click, however quickly a second click follows
+    othersBusy.current = true; setOthers("busy");
+    try {
+      const { supabase } = await import("../lib/supabaseClient");
+      const { error } = await supabase.auth.signOut({ scope: "others" });
+      setOthers(error ? "error" : "done");
+    } catch { setOthers("error"); }
+    finally { othersBusy.current = false; }
+  };
+  const retryLinked = () => { setRetry("busy"); load().finally(() => setRetry("done")); };
   const signInAgain = async () => {
     try { await signOut(); } catch { /* signed out anyway */ }
     try { await startHosted("sign-in", `${window.location.origin}/?profile#security`); }
@@ -92,14 +143,13 @@ export function SecurityPanel() {
     try { await navigator.clipboard.writeText(setup.secret); setCopy("ok"); setTimeout(() => setCopy(null), 1500); }
     catch { setCopy("failed"); }
   };
-  const on = !!status?.totp?.on;
   const digits = (v) => setCode(v.replace(/\D/g, "").slice(0, 6));
   if (!WORKOS) return null;
 
   return (
     <section id="security" aria-labelledby="security-h" style={{ scrollMarginTop: 90 }}>
-      <h2 id="security-h" style={{ margin: "34px 0 0", fontSize: 17, fontWeight: 800, color: C.ink, letterSpacing: "-0.01em" }}>Security</h2>
-      <p style={{ margin: "4px 0 0", fontSize: 12.5, color: C.ink3 }}>Protect your account with a second step at sign-in.</p>
+      <h2 id="security-h" style={{ margin: "34px 0 0", fontSize: 17, fontWeight: 800, color: C.ink, letterSpacing: "-0.01em" }}>Login and security</h2>
+      <p style={{ margin: "4px 0 0", fontSize: 12.5, color: C.ink3 }}>Protect your Attacked.ai account with our security measures.</p>
 
       {loadErr && (
         <div role="alert" style={{ ...card, background: C.warnBg, borderColor: "#F1DE9C", fontSize: 13, color: C.ink2, display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
@@ -110,92 +160,17 @@ export function SecurityPanel() {
         </div>
       )}
 
-      {/* Two-step verification */}
-      <div style={card}>
-        <h3 ref={titleRef} tabIndex={-1} style={h3}>Two-step verification {status && status.workos !== false && <span style={pill(on)}>{on ? "On" : "Off"}</span>}
-          {status && status.workos !== false && !on && status.method !== "Passkey" && <span style={{ ...pill(false), background: C.warnBg, color: C.goldDeep }}>Recommended</span>}</h3>
-        {!status && !loadErr && <p style={p}>Checking…</p>}
+      <LoginCard user={user} status={status} loading={loading} noWorkos={noWorkos} v8={v8} hasPassword={hasPassword} on={on}
+        bridgeOff={bridgeOff} disabledTitle={disabledTitle} busy={busy} step={step}
+        pwForm={pwForm} setPwForm={setPwForm} pwMsg={pwMsg} pwHeadingRef={pwRef} retry={retry} others={others}
+        onOpenPassword={openPassword} onSavePassword={savePassword} onCancel={cancel} onRetry={retryLinked}
+        onOthers={() => setOthers("confirm")} onOthersConfirm={signOutOthers} onOthersCancel={() => setOthers("idle")} onOthersNow={signOutOthers}
+        onSignInAgain={signInAgain} />
 
-        {status && status.workos === false && (<>
-          <p style={p}>To use two-step verification, sign in once with the Attacked.ai sign-in page. Then come back here to turn it on.</p>
-          <button type="button" style={btn(true)} onClick={signInAgain}>Sign out and sign in again</button>
-        </>)}
-
-        {status && status.workos !== false && !on && step === "idle" && (<>
-          <p style={p}>Adds a second step on the Attacked.ai sign-in page: a 6-digit code from an authenticator app on your phone, such as Google Authenticator, Microsoft Authenticator or 1Password. A stolen password alone is then not enough to get in.</p>
-          <p style={{ ...p, fontSize: 12.5, color: C.ink3 }}>It's optional, and you can turn it off here at any time. Keep the app on your phone. If you lose it, contact the Attacked.ai team and we will reset two-step verification after checking it's you.</p>
-          <button type="button" style={btn(true, !!busy)} disabled={!!busy} onClick={start}>{busy === "start" ? "Starting…" : "Turn on two-step verification"}</button>
-        </>)}
-
-        {step === "setup" && setup && (
-          <form onSubmit={confirm}>
-            <p style={{ ...p, fontWeight: 600, color: C.ink }}>1. Add Attacked.ai to your authenticator app.</p>
-            <div style={{ display: "flex", gap: 22, flexWrap: "wrap", alignItems: "center", marginBottom: 14 }}>
-              {setup.qr && <img src={setup.qr} alt="QR code that adds Attacked.ai to an authenticator app" width={168} height={168} style={{ border: `1px solid ${C.line}`, borderRadius: 8, background: "#fff" }} />}
-              <div style={{ flex: "1 1 220px", fontSize: 12.5, color: C.ink3, lineHeight: 1.6 }}>
-                {setup.qr ? "Scan the code with the app. " : ""}On this phone? {setup.uri && <a href={setup.uri} style={{ color: C.goldDeep, fontWeight: 700 }}>Open in authenticator app</a>}{setup.uri ? ", or a" : "A"}dd an account by hand with this key:
-                {setup.secret && (
-                  <div style={{ marginTop: 6, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                    <code style={{ fontFamily: MONO, fontSize: 13, color: C.ink, background: C.paper2, border: `1px solid ${C.line}`, padding: "6px 8px", borderRadius: 4, wordBreak: "break-all" }}>{setup.secret}</code>
-                    <button type="button" style={{ ...btn(false), padding: "6px 10px", fontSize: 10.5 }} onClick={copyKey}>{copy === "ok" ? "Copied" : "Copy"}</button>
-                  </div>
-                )}
-                {copy === "failed" && <div style={{ marginTop: 4, color: C.err }}>Copy didn't work here: select the key and copy it.</div>}
-              </div>
-            </div>
-            <label htmlFor="totp-code" style={{ ...p, display: "block", fontWeight: 600, color: C.ink }}>2. Type the 6-digit code the app shows.</label>
-            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-              <input id="totp-code" inputMode="numeric" autoComplete="one-time-code" placeholder="000000" value={code} onChange={(e) => digits(e.target.value)}
-                style={codeInput} autoFocus={finePointer()} aria-invalid={msg && !msg.ok ? true : undefined} aria-describedby="security-msg" />
-              <button type="submit" style={btn(true, !!busy || code.length !== 6)} disabled={!!busy || code.length !== 6}>{busy === "confirm" ? "Checking…" : "Confirm"}</button>
-              <button type="button" style={btn(false, !!busy)} disabled={!!busy} onClick={cancel}>Cancel</button>
-            </div>
-          </form>
-        )}
-
-        {status && on && step === "idle" && (<>
-          <p style={p}>{status.totp.since ? `On since ${fmtDate(status.totp.since)}. ` : ""}When you sign in on the Attacked.ai sign-in page, it asks for a code from your authenticator app. Signing in with a passkey covers both steps.</p>
-          <button type="button" style={btn(false, !!busy)} disabled={!!busy} onClick={() => { setStep("remove"); setCode(""); setMsg(null); }}>Turn off</button>
-        </>)}
-
-        {step === "remove" && (
-          <form onSubmit={remove}>
-            <label htmlFor="totp-off" style={{ ...p, display: "block" }}>To turn two-step verification off, type the current code from your authenticator app.</label>
-            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-              <input id="totp-off" inputMode="numeric" autoComplete="one-time-code" placeholder="000000" value={code} onChange={(e) => digits(e.target.value)}
-                style={codeInput} autoFocus={finePointer()} aria-invalid={msg && !msg.ok ? true : undefined} aria-describedby="security-msg" />
-              <button type="submit" style={{ ...btn(false, !!busy || code.length !== 6), color: C.err, borderColor: C.err }} disabled={!!busy || code.length !== 6}>{busy === "remove" ? "Checking…" : "Turn off two-step"}</button>
-              <button type="button" style={btn(false, !!busy)} disabled={!!busy} onClick={cancel}>Keep it on</button>
-            </div>
-          </form>
-        )}
-
-        <div id="security-msg" role="status" aria-live="polite" style={{ marginTop: msg ? 12 : 0, fontSize: 13, fontWeight: 600, color: msg?.ok ? C.ok : C.err }}>
-          {msg?.text || ""}
-          {msg?.reauth && <div style={{ marginTop: 8 }}><button type="button" style={btn(true)} onClick={signInAgain}>Sign in again</button></div>}
-        </div>
-      </div>
-
-      {/* Passkeys */}
-      <div style={card}>
-        <h3 style={h3}>Passkeys {status?.method === "Passkey" && <span style={pill(true)}>Used last time</span>}</h3>
-        <p style={p}>Sign in with your fingerprint, face or phone instead of typing anything. A passkey can't be phished or reused, and it covers both steps of two-step verification on its own.</p>
-        <p style={{ ...p, marginBottom: 0 }}>
-          <strong style={{ color: C.ink }}>How to add one:</strong> if you sign in with your email and password, the Attacked.ai sign-in page offers to save a passkey on your device. You can also create one when you make an account. Signing in with Google, Microsoft or an email code doesn't offer one. Lost a device? Contact the Attacked.ai team to remove its passkey.
-        </p>
-      </div>
-
-      {/* Last sign-in */}
-      {status && status.method && (
-        <div style={{ ...card, padding: "16px 24px", background: C.paper2 }}>
-          <div style={{ fontSize: 13, lineHeight: 1.6, color: C.ink2 }}>
-            <strong style={{ color: C.ink }}>Your last sign-in (any device): </strong>with {METHOD[status.method] || status.method}.
-            {tier === "admin" && !on && status.method !== "Passkey" && (
-              <div style={{ marginTop: 6, color: C.goldDeep, fontWeight: 600 }}>You are an admin: please turn on two-step verification or use a passkey. The admin console will soon require it.</div>
-            )}
-          </div>
-        </div>
-      )}
+      <TwoStepCard status={status} loading={loading} noWorkos={noWorkos} on={on} bridgeOff={bridgeOff} disabledTitle={disabledTitle}
+        busy={busy} step={step} setup={setup} code={code} copy={copy} msg={msg} passkeyInfo={passkeyInfo} hasPassword={hasPassword} tier={tier}
+        titleRef={titleRef} flowRef={flowRef} onStart={start} onConfirm={confirm} onRemove={remove} onOpenRemove={openRemove} onCancel={cancel}
+        onCopy={copyKey} onCode={digits} onTogglePasskey={togglePasskey} onTogglePasskeyInfo={() => setPasskeyInfo((v) => !v)} onSignInAgain={signInAgain} />
     </section>
   );
 }

@@ -2,7 +2,7 @@
 
 ## In plain words
 
-- **Two-step verification:** after the usual sign-in, the WorkOS sign-in page asks for a 6-digit code from an authenticator app on the reader's phone (Google Authenticator, Microsoft Authenticator, 1Password…). Readers turn it on themselves in **Profile → Security**.
+- **Two-step verification:** after the usual sign-in, the WorkOS sign-in page asks for a 6-digit code from an authenticator app on the reader's phone (Google Authenticator, Microsoft Authenticator, 1Password…). Readers turn it on themselves in **Profile → Login and security** (§7).
 - **Passkeys:** sign in with a fingerprint, face or phone instead of typing. They're created on the WorkOS sign-in page and count as both steps.
 
 ## What exists now
@@ -10,9 +10,9 @@
 | Part | State |
 |---|---|
 | WorkOS **Staging** (what the site uses today) | Passkeys ON with "offer a passkey" after password sign-in. Two-step **Optional** (someone set it to "Required" by 19 Oct, which forced every sign-in through the authenticator screen; set back to Optional on 19 Oct at the owner's request: **never forced, only suggested**). Email verification required. Google, Microsoft, email code and password sign-in. |
-| **Reminder card** (`src/auth/SecurityNudge.jsx`, 19 Oct) | A polite card once per visit for readers without two-step: "Set it up" (→ Profile → Security) or "Remind me later" (7, then 14, then 30 days). Hidden after passkey/SSO sign-ins, on profile/admin/map/checkout/legal pages, and while the bridge can't answer, so it **appears only once the bridge below is deployed**. Preview: `review/security-nudge-preview.html`. |
+| **Reminder card** (`src/auth/SecurityNudge.jsx`, 19 Oct) | A polite card once per visit for readers without two-step: "Set it up" (→ Profile → Login and security) or "Remind me later" (7, then 14, then 30 days). Hidden after passkey/SSO sign-ins, on profile/admin/map/checkout/legal pages, and while the bridge can't answer, so it **appears only once the bridge below is deployed**. Preview: `review/security-nudge-preview.html`. |
 | WorkOS **Production** | **Not set up.** Two-step off, passkeys off, no sign-in methods. Mohini's WorkOS role is read-only there, so a WorkOS **admin** must do it (§4). |
-| **Profile → Security** panel (`src/auth/SecurityPanel.jsx`) | Built, tested with a simulated session (`review/security-preview.html`). It turns two-step on (scan QR, confirm one code) and off (current code), explains passkeys, and shows how the last sign-in was made. |
+| **Profile → Login and security** (`src/auth/SecurityPanel.jsx`, `src/auth/security/`) | Rebuilt on 22 Oct as a MongoDB-style page (§7): a **Login** card (email, set or change the password in-page, linked accounts, last sign-in, sign out everywhere else) and a **Two-step verification** card (Passkey and Authenticator app rows, each with "Set up"). Turns two-step on (scan QR, confirm one code) and off (current code). Tested with a simulated session (`review/security-preview.html`). Needs bridge **v8** for the password and linked-account rows; with an older bridge it says they are "being updated". |
 | Sign-in bridge `supabase/functions/workos-auth` | **Updated, NOT deployed** (the Supabase connector tools were switched off). Adds the `/security` routes and records `auth_method` at each sign-in. Since 22 Oct it also serves the one-page sign-up (`/?signup`, WORKOS-SIGNIN.md): its email-code and direct Google / Microsoft routes refuse any account with a factor (409 `use_hosted`, or a second trip to the hosted sign-in); `BRIDGE_SIGNUP_FORM=off` closes them. Backup of the live version (v4): `D:\attacked-dev\backups\workos-auth-v4-2026-10-17.ts`. |
 | Database migration `supabase/migrations/20261017_mfa_attempts.sql` | **Written, NOT applied.** A private wrong-code counter (5 tries per 10 minutes, safe against parallel requests). |
 | Admin console | Shows a reminder banner until the admin has two-step on or signs in with a passkey. **A reminder only, not an access check yet** (§5). |
@@ -36,11 +36,11 @@
 
 **Sign-in works only from exact addresses:** the live site and localhost:5173 / :5180. Vercel preview links no longer sign in (a pattern for them could be claimed by someone else's Vercel project and catch a sign-in). To test a preview, add its exact address to the `WORKOS_ALLOWED_ORIGINS` secret (comma-separated).
 
-**If sign-in breaks:** redeploy the v4 backup file (step 2 with the backup's code). Once the new site (with `/?signup`) is live, a v4 bridge makes its sign-up page fall back to WorkOS's hosted sign-up (v4 does not say `signup_form`), so the site can stay; nothing else on it needs v5 except Profile → Security.
+**If sign-in breaks:** redeploy the v4 backup file (step 2 with the backup's code). Once the new site (with `/?signup`) is live, a v4 bridge makes its sign-up page fall back to WorkOS's hosted sign-up (v4 does not say `signup_form`), so the site can stay; nothing else on it needs v5 except Profile → Login and security.
 
 ## 2. Test it on http://localhost:5173 (about 10 minutes, your own account)
 
-1. **Sign in** on the WorkOS page, then go to **Profile → Security**. If it asks you to "sign in again", do so (changes need a recent sign-in).
+1. **Sign in** on the WorkOS page, then go to **Profile → Login and security**. If it asks you to "sign in again", do so (changes need a recent sign-in).
 2. **Turn on two-step verification:** scan the QR code with Google or Microsoft Authenticator, then type the code and **Confirm**. The pill shows **On**, and an email arrives.
 3. **Sign out, then sign in again with each method**, and note whether WorkOS asks for the 6-digit code:
    - email + password
@@ -52,8 +52,8 @@
 4. **Passkey:**
    - Sign in with email + password, accept the passkey offer, sign out.
    - Sign in choosing **"Sign in with passkey"**.
-   - Profile → Security shows "Passkeys · Used last time".
-5. **Turn off:** Profile → Security → **Turn off**, then type the current code.
+   - Profile → Login and security: the Passkey row shows "Used last time" and Last sign-in says "With a passkey".
+5. **Turn off:** Profile → Login and security → **Turn off**, then type the current code.
 
 ## 3. The gap to close before calling it "production" (important)
 
@@ -103,3 +103,39 @@ Once every admin has two-step on (or uses a passkey) **and** §3 step 3 is in pl
 - **Reader lost a device with a passkey:** WorkOS → Users → the person → **Delete passkey**. They then sign in another way.
 - **Too many wrong codes:** it clears itself after 10 minutes. To clear it at once:
   `delete from public.mfa_attempts where user_id = '<their user id>';`
+- **Reader asks to "unlink" Google or Microsoft:** there is no unlink in WorkOS (not in the API, the SDK, the dashboard or the widgets). The only way by hand is to **delete the whole WorkOS user** (WorkOS → Users → the person → Delete), which also drops their TOTP factor, password and passkeys. Then in Supabase SQL:
+  `update auth.users set raw_app_meta_data = raw_app_meta_data - 'workos_user_id' - 'mfa_factor_id' - 'mfa_since' - 'methods_used' - 'password_set_at' where email = '<their email>';`
+  so the next sign-in creates a fresh WorkOS user. Only do this once the reader knows two-step, the password and any passkey must be set up again. The Linked accounts row tells readers a linked account "can't be removed on its own".
+- **Reader says the Password row shows "Set password" although they have one:** the page can only tell from the bridge's `password_set_at` stamp (written by the in-page form) or a last sign-in by password; a password set on the hosted page's "Forgot password?" leaves no stamp. Harmless: the form is "Set or change your password" either way. The WorkOS dashboard (or the MCP `users` query) shows `hasPassword` if you need to check.
+
+## 7. Login and security page (22 Oct 2026)
+
+**Profile → Login and security** (`/?profile#security`; `src/auth/SecurityPanel.jsx` owns the state, `src/auth/security/LoginCard.jsx`, `TwoStepCard.jsx`, `icons.jsx`, `tokens.js` render) follows the shape of MongoDB's "Login and Security" page: a **Login** card and a **Two-step verification** card. Two-step stays **Optional** in WorkOS (nothing here touches the setting); every method row only offers "Set up". Plain words throughout: "two-step verification", "authenticator app", "passkey", "linked accounts".
+
+**Login card**
+
+| Row | What it shows | Where it comes from |
+|---|---|---|
+| Email address | a read-only box and "To change it, contact the Attacked.ai team." | the Supabase session |
+| Password | "Set password" or "Change password" → an in-page form (new password twice, plus the authenticator code when two-step is on) | `POST /security/password` (bridge v8) |
+| Linked accounts | one row per sign-in provider the reader has used; pill **Linked** when WorkOS lists the identity, else **Used last time** / **Used before**. No unlink. | `GET /security?full=1` → `login.methods` (accumulated at each sign-in) ∪ `login.identities` |
+| Last sign-in | "With Google · 22 Oct 2026, 09:41" (any device) | `method` + `signed_in_at` |
+| Signed-in devices | "Sign out everywhere else", with an inline confirm | Supabase `signOut({ scope: "others" })`; no bridge call |
+
+**Two-step card:** a Passkey row (its "Set up" opens an explainer: set a password, sign out, sign in with it on the Attacked.ai sign-in page, accept the offer) and an Authenticator app row (QR set-up and turn-off, unchanged), then three footnotes (set up both; why no email/SMS codes; lost phone) and the live status line. An admin without two-step or a passkey still sees the reminder line.
+
+**What the page cannot do, and why**
+- **Unlink a Google or Microsoft account.** WorkOS has no unlink anywhere (API, SDK, dashboard, widgets). The row says "A linked account can't be removed on its own." See the runbook (§6) for the only by-hand option.
+- **Recovery codes.** None exist in AuthKit (MongoDB has none either). A lost phone means the team deletes the factor (§6).
+- **Passkeys in-app.** No REST endpoint lists, creates or deletes a passkey; enrolment happens only on the hosted page, after a password sign-in (the two-weekly "offer a passkey" reminder, which the reader can decline for good). WorkOS also offers a `<UserSecurity />` widget (`@workos-inc/widgets` 1.20.x: set or change the password, configure and reset two-step; token from `POST /widgets/token {user_id}` minted by a backend, 1-hour expiry, or the AuthKit access token; peer deps `@radix-ui/themes ^3`, `@tanstack/react-query ^5`, React 18). It is not used here: it would bypass the bridge's recent-sign-in gate and wrong-code counter, duplicate the existing two-step routes, and ship WorkOS's UI kit. Passkey operations are not documented for the widget or the Widgets API either, so in-app passkey management stays out.
+- **Change the email address.** No flow in WorkOS or the bridge; the helper says to contact the team.
+- **A list of sessions.** `GET /user_management/users/{id}/sessions` exists, but the bridge revokes every WorkOS session 0.6–2 s after sign-in (observed on Staging), so it would list only revoked sessions; not shown. "Sign out everywhere else" is Supabase-only: other devices' refresh tokens are revoked at once and their access tokens lapse within the hour. Supabase fires no `SIGNED_OUT` event for `scope: "others"`, so the page reads the returned `{ error }` only.
+- **Know for certain whether a password exists.** The REST User object has no flag. The page guesses from the bridge's `password_set_at` stamp or a last sign-in by password; the form heading "Set or change your password" covers both cases. The dashboard / MCP `users` query exposes `hasPassword` to check a label.
+
+**The password route.** `POST /security/password {password, code?}` → WorkOS `PUT /user_management/users/{id} {password}`. Gates, in this order: a sign-in through the Attacked.ai sign-in page within 20 minutes (403 `reauth`, before any WorkOS call); the strict WorkOS-id lookup (409 `no_workos`); 10–128 characters and no email address inside (400 `weak_password`); and, when two-step is on, the current authenticator code, checked by WorkOS through the shared wrong-code counter (400 `code_required`; 429 after 5 wrong codes in 10 minutes). A WorkOS 400/422 on the write (its own strength policy) comes back as "too easy to guess". One change a minute per account (429 "Too many changes in a short time", checked on the bridge's own `password_set_at` stamp before the code check and before any WorkOS call): every change is a WorkOS write and an email from the shared sender, so a signed-in script cannot run either dry for everyone. WorkOS has no current-password check; the gates above are the substitute, with two mitigations: the "Your Attacked.ai password was changed" email, and the "Sign out everywhere else" offer under the success message. The password is never logged or echoed. If two-step was switched on in another tab after the page loaded, the first save answers `code_required` and the form simply gains its code field. The in-page set-up at WorkOS is now verified too: after creating the authenticator factor the bridge runs a WorkOS challenge + verify with the reader's code and deletes the factor if that fails, so no half-made factor is left and the factor counts as verified on WorkOS's side (a code the bridge itself accepted costs no attempt when WorkOS's clock refuses it). Should that delete fail as well, the factor is live whatever we say, so the bridge notes it on the account, emails "turned on" and answers "already on" (`state_changed`): the page reloads and shows On, and the reader can turn it off with the same app entry. The function log says `unverified factor not deleted` with the factor id.
+
+**Feature detection.** The page makes one status request, `GET /security?full=1`. If the answer has no `signed_in_at` key the bridge is still v7: the page hides the Password button and the Linked accounts list ("Password and linked-account settings are being updated. Check back shortly.") and never calls `/security/password`. The two-step rows and the "Sign out everywhere else" row work with either bridge. The reminder card keeps calling the plain `GET /security`, which makes no extra WorkOS call.
+
+**Deploy order.** Bridge **v8** first (as in §1: `verify_jwt = false`, migration `20261017_mfa_attempts.sql` applied — without it every confirm, turn-off and password change with two-step on fails closed with 502), then the site. Site first only shows the "being updated" line until the bridge follows; bridge first changes nothing visible.
+
+**Previews.** `review/security-preview.html?state=google | google-linked | nolinked | idfail | idfail-magic | passkey | oldbridge | off | on | noworkos | reauth | expired | down` (`reauth`: the status loads but every change answers "sign in again"; `expired` / `down`: the status itself fails with 401 / 502, so the alert shows), with `&pw=429` / `&pw=502` for the password route's errors, `&pw=code_required` for two-step switched on elsewhere after the page loaded (the first save answers `code_required`, then the form shows the code field), and `&others=fail` for a failed "Sign out everywhere else". Code 123456 passes every simulated check.
