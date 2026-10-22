@@ -16,6 +16,7 @@ import { AdminStats } from "./AdminStats";
 import { AdminFeedback } from "./AdminFeedback";
 import { AdminBriefings } from "./AdminBriefings";
 import { AdminReports } from "./AdminReports";
+import { AdminBroadcasts } from "./AdminBroadcasts";
 import { Logo } from "../auth/Logo";
 import { useAuth } from "../auth/AuthProvider";
 import { WORKOS } from "../lib/workos";
@@ -83,12 +84,21 @@ function TabIcon({ name, size = 15 }) {
         <line x1="8" y1="17" x2="13" y2="17" />
       </svg>
     );
+    case "broadcasts": return (
+      <svg {...common}>
+        <rect x="9" y="3" width="6" height="11" rx="3" />
+        <path d="M5 11a7 7 0 0 0 14 0" />
+        <line x1="12" y1="18" x2="12" y2="21" />
+        <line x1="9" y1="21" x2="15" y2="21" />
+      </svg>
+    );
     default: return null;
   }
 }
 
 const TABS = [
   { id: "reports",   label: "Reports",   icon: "reports",   body: AdminReports },
+  { id: "broadcasts", label: "Broadcasts", icon: "broadcasts", body: AdminBroadcasts },
   { id: "inbox",     label: "Inbox",     icon: "inbox",     body: AdminInbox },
   { id: "briefings", label: "Briefings", icon: "briefings", body: AdminBriefings },
   { id: "users",     label: "Users",     icon: "users",     body: AdminUsers },

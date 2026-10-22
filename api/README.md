@@ -40,3 +40,14 @@ are not in git).
 1. **Beside Supabase** (this) — subscriber layer, reports, subscription, ingest through the API.
 2. **Lock the DB** — revoke anon `SELECT` on `blast_radius`, `adaptive_controls`, `peer_watchlist`, `historical_analogues`, `sources`; the API needs `SUPABASE_SERVICE_ROLE_KEY` from then on. Retire `guard-ingest` and rotate the ingest token.
 3. **Money and mail** — Stripe checkout + webhooks on `/subscription`, email sends here instead of the Deno functions.
+
+## Vercel functions beside it (not FastAPI)
+
+Two small Node handlers in this folder ARE deployed by Vercel (the rest of
+`api/` is ignored there, see `.vercelignore`); the Vite dev server mounts the
+same handlers, so localhost behaves like the live site:
+
+| Route | Who | What |
+|---|---|---|
+| `POST /api/report-pdf` `{"ref"}` | subscriber | the print edition of a briefing, stamped with the reader's own profile (`api/_lib/reportPdf.mjs`) |
+| `GET /api/broadcasts?ref=` | anyone | the published broadcast episodes of a briefing, for a copy of the report opened without a host page (`src/lib/broadcastShape.js` shapes it; the Hub itself reads the table directly) |

@@ -223,7 +223,7 @@ export function AdminReports() {
               </div>
             ))}
         </div>
-        <AdminBroadcasts reportRef={editing ? data.ref : ""} />
+        <AdminBroadcasts reportRef={editing ? data.ref : ""} compact reports={list} />
         </div>
 
         {/* EDITOR */}

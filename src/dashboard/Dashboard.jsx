@@ -23,7 +23,9 @@ import { SiteNav } from "../auth/SiteNav";
 import { CATEGORY_NAME, INDUSTRIES, ROLES, SECTORS, SEVERITY, isSubscriber, tierLabel } from "../lib/taxonomy";
 import { loadCounts, loadIncidentDetail, loadIndustry, loadIndustryExtras, loadReportIndex, reportRefFor } from "./data";
 import { incidentImage, incidentPhoto, industryPhoto } from "../lib/images";
-import { readerLicence, prepareReportFrame } from "../lib/reportLock";
+import { applyBroadcastToFrame, readerLicence, prepareReportFrame } from "../lib/reportLock";
+import { frameBroadcast } from "../lib/broadcasts";
+import { useReportBroadcast } from "../lib/useReportBroadcast";
 import { reportHtml } from "../lib/api";
 import { fetchFullReport, fetchReportHtml } from "../lib/reports";
 import "./dashboard.css";
@@ -293,13 +295,18 @@ function ReportFrame({ i, reportRef, subscriber, onSubscribe, readerName, reader
     fit(); window.addEventListener("resize", fit);
     return () => window.removeEventListener("resize", fit);
   }, [reportRef, doc]);
+  // The broadcast goes into the frame's own card (v5 shell); see reportLock.applyBroadcastToFrame.
+  const eps = useReportBroadcast(reportRef);
   useEffect(() => {
     const fr = ref.current; if (!fr) return;
-    const onLoad = () => { prepareReportFrame(fr, { subscriber, onSubscribe, readerName, reportRef, reader }); };
+    const onLoad = () => {
+      prepareReportFrame(fr, { subscriber, onSubscribe, readerName, reportRef, reader });
+      if (eps !== undefined) applyBroadcastToFrame(fr, frameBroadcast(eps));
+    };
     fr.addEventListener("load", onLoad);
     if (fr.contentDocument?.readyState === "complete" && fr.contentDocument.body?.children.length) onLoad();
     return () => { fr.removeEventListener("load", onLoad); };
-  }, [reportRef, subscriber, onSubscribe, readerName, reader, doc]); // doc: the frame mounts only once the API answered
+  }, [reportRef, subscriber, onSubscribe, readerName, reader, doc, eps]); // doc: the frame mounts only once the API answered
   if (doc === undefined) return <div className="panel empty mono" style={{ margin: 22 }}>Loading the report…</div>;
   return doc
     ? <iframe ref={ref} className="report-frame" srcDoc={doc} title={i.headline} style={{ height: h }} />

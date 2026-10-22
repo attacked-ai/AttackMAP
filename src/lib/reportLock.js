@@ -199,6 +199,25 @@ export function readerLicence(profile, user, subscriber) {
   };
 }
 
+// The broadcast for the frame. The v5 shell carries a broadcast card after the
+// Executive Summary (podCard/applyBroadcast in the report); the host hands the
+// published episode over as window.__ATTACKED_BROADCAST__ (frameBroadcast()
+// shape: series, episode, title, url, page, duration, note, hosts) and fires
+// 'attacked-broadcast', and the card re-renders itself with a working player.
+// null = known to have none (the card keeps its baked "coming soon" line).
+// Returns true when the shell has a card of its own, so the host can keep its
+// own bar only for shells without one (the 310 v4 files).
+export function applyBroadcastToFrame(frame, broadcast) {
+  let doc, win;
+  try { doc = frame.contentDocument; win = frame.contentWindow; } catch { return false; }
+  if (!doc || !win || !doc.body || !doc.body.children.length) return false;
+  try {
+    win.__ATTACKED_BROADCAST__ = broadcast ? { ...broadcast } : null;
+    try { win.dispatchEvent(new win.Event("attacked-broadcast")); } catch { /* older frame */ }
+  } catch { return false; }
+  return !!doc.getElementById("podCard") || typeof win.applyBroadcast === "function";
+}
+
 export function prepareReportFrame(frame, { subscriber, onSubscribe, readerName, reportRef, reader } = {}) {
   let doc; try { doc = frame.contentDocument; } catch { return false; }
   if (!doc || !doc.body || !doc.body.children.length) return false;

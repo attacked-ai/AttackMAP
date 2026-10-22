@@ -15,10 +15,11 @@
 import React, { useEffect, useState, useRef } from "react";
 import { supabase } from "../lib/supabaseClient";
 import { isSubscriber } from "../lib/taxonomy";
-import { prepareReportFrame, readerLicence } from "../lib/reportLock";
+import { applyBroadcastToFrame, prepareReportFrame, readerLicence } from "../lib/reportLock";
 import { reportHtml } from "../lib/api";
 import { fetchFullReport, fetchReportHtml, listPublishedReports } from "../lib/reports";
-import { listBroadcasts, formatDuration, isAudioFile } from "../lib/broadcasts";
+import { formatDuration, frameBroadcast, isAudioFile } from "../lib/broadcasts";
+import { useReportBroadcast } from "../lib/useReportBroadcast";
 import { useAuth } from "./AuthProvider";
 import { AuthModal } from "./AuthModal";
 import { SiteNav } from "./SiteNav";
@@ -516,23 +517,16 @@ function ArticleView({ article, onBack, onMap, user }) {
 }
 
 // BroadcastBar — the related broadcast (podcast episode) for the open report,
-// docked at the foot of the frame. Nothing is shown when the report has no
-// episode; an episode without an audio file is announced as coming soon; a
-// file plays in place; an episode page (Spotify, YouTube) opens in a new tab.
-// Readers can dismiss it for this report. Data: public.report_broadcasts.
-function BroadcastBar({ reportRef }) {
-  const [eps, setEps] = useState([]);
+// docked at the foot of the frame, for report shells WITHOUT a broadcast card
+// of their own (the v4 files; the v5 shell plays the episode in its own card,
+// fed through reportLock.applyBroadcastToFrame). Nothing is shown when the
+// report has no episode; an episode without an audio file is announced as
+// coming soon; a file plays in place; an episode page (Spotify, YouTube)
+// opens in a new tab. Readers can dismiss it for this report.
+function BroadcastBar({ eps }) {
   const [hidden, setHidden] = useState(false);
-  useEffect(() => {
-    let dead = false; setEps([]); setHidden(false);
-    // Design review (localhost only — import.meta.env.DEV is false in the live
-    // build): ?bcdemo=1 shows a sample episode for any report.
-    const demo = import.meta.env.DEV && (() => { try { return new URLSearchParams(window.location.search).get("bcdemo"); } catch { return null; } })();
-    const q = demo ? Promise.resolve([{ id: 0, report_ref: reportRef, series: "Attacked.ai Briefing Room", episode: "Episode 1", title: "The Millisecond That Stopped UK Departures", audio_url: demo === "2" ? "https://example.com/episode-1.mp3" : null, page_url: null, duration_sec: demo === "2" ? 1380 : null, show_notes: "The analyst conversation on the NATS outage: the latent defect, who it reached and what to do next.", published: true, published_at: new Date().toISOString() }]) : listBroadcasts(reportRef);
-    q.then((rows) => { if (!dead) setEps(rows); });
-    return () => { dead = true; };
-  }, [reportRef]);
-  const ep = eps[0];
+  useEffect(() => { setHidden(false); }, [eps]);
+  const ep = eps && eps[0];
   if (!ep || hidden) return null;
   const link = ep.page_url || (ep.audio_url && !isAudioFile(ep.audio_url) ? ep.audio_url : null);
   const file = ep.audio_url && isAudioFile(ep.audio_url) ? ep.audio_url : null;
@@ -593,13 +587,22 @@ function ReportFrame({ article, onBack, onMap, user, profile, subscriber, authRe
     })();
     return () => { dead = true; };
   }, [reportRef, subscriber, authReady]);
+  // The broadcast: into the frame's own card when the shell has one (v5), else
+  // the bar under the frame. eps arrives on its own clock, so the effect also
+  // re-runs when it does (the frame is usually loaded by then).
+  const eps = useReportBroadcast(reportRef);
+  const [cardInFrame, setCardInFrame] = useState(false);
+  useEffect(() => { setCardInFrame(false); }, [reportRef]);
   useEffect(() => {
     const fr = ref.current; if (!fr) return;
-    const onLoad = () => { prepareReportFrame(fr, { subscriber, onSubscribe: () => { window.location.href = "/?subscribe"; }, readerName: user?.email || "", reportRef, reader: readerLicence(profile, user, subscriber) }); };
+    const onLoad = () => {
+      prepareReportFrame(fr, { subscriber, onSubscribe: () => { window.location.href = "/?subscribe"; }, readerName: user?.email || "", reportRef, reader: readerLicence(profile, user, subscriber) });
+      if (eps !== undefined) setCardInFrame(applyBroadcastToFrame(fr, frameBroadcast(eps)));
+    };
     fr.addEventListener("load", onLoad);
     if (fr.contentDocument?.readyState === "complete" && fr.contentDocument.body?.children.length) onLoad();
     return () => fr.removeEventListener("load", onLoad);
-  }, [article?.reportRef, subscriber, user?.email, profile, doc]); // doc: the frame mounts only once the API answered
+  }, [article?.reportRef, subscriber, user?.email, profile, doc, eps]); // doc: the frame mounts only once the API answered
   return (
     <main style={{ background: "#FFFFFF", fontFamily: "Inter, sans-serif", position: "relative" }}>
       <button className="rf-back" onClick={onBack} style={{
@@ -616,7 +619,7 @@ function ReportFrame({ article, onBack, onMap, user, profile, subscriber, authRe
         title={article.headline || article.id}
         className="rframe"
       />}
-      <BroadcastBar reportRef={reportRef} />
+      {!cardInFrame && <BroadcastBar eps={eps} />}
     </main>
   );
 }
