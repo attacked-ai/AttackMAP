@@ -14,7 +14,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { createHash } from "node:crypto";
-import { PDFDocument, PDFName, StandardFonts, rgb } from "pdf-lib";
+import { PDFDocument, PDFName, PDFString, StandardFonts, rgb } from "pdf-lib";
 import QRCode from "qrcode";
 
 export const PDF_DIR = process.env.REPORT_PDF_DIR || path.join(process.cwd(), "reports-pdf");
@@ -74,7 +74,7 @@ export async function stampReportPdf({ ref, name, role, email = "", userId = "",
     // the square is also a link (a reader on a laptop clicks instead of scanning)
     const link = doc.context.register(doc.context.obj({
       Type: "Annot", Subtype: "Link", Rect: [x0, H2 - y1, x1, H2 - y0], Border: [0, 0, 0],
-      A: { Type: "Action", S: "URI", URI: doc.context.obj(target) },
+      A: { Type: "Action", S: "URI", URI: PDFString.of(target) },   // a string, not a name
     }));
     const annots = p2.node.lookup(PDFName.of("Annots"));
     if (annots) annots.push(link); else p2.node.set(PDFName.of("Annots"), doc.context.obj([link]));
