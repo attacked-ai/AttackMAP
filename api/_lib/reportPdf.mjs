@@ -14,7 +14,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { createHash } from "node:crypto";
-import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
+import { PDFDocument, PDFName, StandardFonts, rgb } from "pdf-lib";
 import QRCode from "qrcode";
 
 export const PDF_DIR = process.env.REPORT_PDF_DIR || path.join(process.cwd(), "reports-pdf");
@@ -69,7 +69,15 @@ export async function stampReportPdf({ ref, name, role, email = "", userId = "",
   // 1b. the one QR code: the live edition's URL carrying this copy's number
   if (map.qr && map.url) {
     const [x0, y0, x1, y1] = map.qr;
-    const code = QRCode.create(map.url + (map.url.includes("?") ? "&" : "?") + "copy=" + lid.split("/ ").pop(), { errorCorrectionLevel: "M" });
+    const target = map.url + (map.url.includes("?") ? "&" : "?") + "copy=" + lid.split("/ ").pop();
+    const code = QRCode.create(target, { errorCorrectionLevel: "M" });
+    // the square is also a link (a reader on a laptop clicks instead of scanning)
+    const link = doc.context.register(doc.context.obj({
+      Type: "Annot", Subtype: "Link", Rect: [x0, H2 - y1, x1, H2 - y0], Border: [0, 0, 0],
+      A: { Type: "Action", S: "URI", URI: doc.context.obj(target) },
+    }));
+    const annots = p2.node.lookup(PDFName.of("Annots"));
+    if (annots) annots.push(link); else p2.node.set(PDFName.of("Annots"), doc.context.obj([link]));
     const n = code.modules.size, quiet = 2, cell = (x1 - x0) / (n + 2 * quiet);
     p2.drawRectangle({ x: x0 - 2, y: H2 - (y1 + 2), width: x1 - x0 + 4, height: y1 - y0 + 4, color: WHITE, borderWidth: 0 });
     for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) {
