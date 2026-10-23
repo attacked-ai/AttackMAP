@@ -12,6 +12,7 @@
 // cover, and records the licensee in the PDF metadata. Same output as
 // tools/stamp_pdf.py in the print project. Under 300 ms for a 42-page master.
 import { readFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { PDFDocument, PDFName, PDFString, StandardFonts, rgb } from "pdf-lib";
@@ -19,6 +20,7 @@ import QRCode from "qrcode";
 
 export const PDF_DIR = process.env.REPORT_PDF_DIR || path.join(process.cwd(), "reports-pdf");
 export const REF = /^ATK-[A-Za-z0-9-]+$/;
+const QR_LOGO = fileURLToPath(new URL("./qr-logo.png", import.meta.url));   // the shield on a white tile, 256 px
 
 const INK = rgb(14 / 255, 17 / 255, 22 / 255);
 const GREY = rgb(0.36, 0.37, 0.4);
@@ -70,7 +72,7 @@ export async function stampReportPdf({ ref, name, role, email = "", userId = "",
   if (map.qr && map.url) {
     const [x0, y0, x1, y1] = map.qr;
     const target = map.url + (map.url.includes("?") ? "&" : "?") + "copy=" + lid.split("/ ").pop();
-    const code = QRCode.create(target, { errorCorrectionLevel: "M" });
+    const code = QRCode.create(target, { errorCorrectionLevel: "H" });   // H: the centre logo may cover up to 30 %
     // the square is also a link (a reader on a laptop clicks instead of scanning)
     const link = doc.context.register(doc.context.obj({
       Type: "Annot", Subtype: "Link", Rect: [x0, H2 - y1, x1, H2 - y0], Border: [0, 0, 0],
@@ -84,6 +86,13 @@ export async function stampReportPdf({ ref, name, role, email = "", userId = "",
       if (!code.modules.get(r, c)) continue;
       p2.drawRectangle({ x: x0 + (c + quiet) * cell, y: H2 - (y0 + (r + quiet + 1) * cell) - 0.15, width: cell + 0.15, height: cell + 0.15, color: INK, borderWidth: 0 });
     }
+    // the company mark in the centre: a white tile (26 % of the side) with the shield
+    try {
+      const png = await doc.embedPng(await readFile(QR_LOGO));
+      const side = x1 - x0, cx = (x0 + x1) / 2, cy = (y0 + y1) / 2, t = side * 0.26 / 2;
+      p2.drawRectangle({ x: cx - t, y: H2 - (cy + t), width: 2 * t, height: 2 * t, color: WHITE, borderWidth: 0 });
+      p2.drawImage(png, { x: cx - t, y: H2 - (cy + t), width: 2 * t, height: 2 * t });
+    } catch { /* no tile file: a plain code still scans */ }
   }
   // 2. the footer line, every page but the cover
   const line = `Licensed to ${name} \u00b7 ${role}`;
