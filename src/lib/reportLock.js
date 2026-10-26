@@ -1,6 +1,11 @@
-// reportLock.js — the free-reader gate for the 310 baked reports
-// (public/reports/<ref>.html), shared by the dashboard's report view and the
-// public Attacked Hub so the two never disagree about what is free.
+// reportLock.js — what the host page does inside a report frame, shared by
+// the dashboard's report view and the public Attacked Hub.
+//
+// The real paywall is server-side since 2026-10-15: a free reader is only
+// ever sent the preview (header, key figures, Executive Summary — see
+// src/lib/reportPreview.js and middleware.js), so the full text never reaches
+// their browser. The section lock below stays as a second layer for any HTML
+// that still arrives whole (the API, a CMS report without a preview).
 //
 // The rule is the product's rule: what happened is free; who it reaches and
 // what to do about it is subscriber. Inside a report that is three sections —
@@ -25,8 +30,38 @@ const LOCK_CSS = `
   .dash-lock button{flex:none;white-space:nowrap;background:#FCBD00;color:#0f0f0f;border:0;border-radius:7px;padding:8px 12px;font:700 11px/1 Inter,system-ui,sans-serif;letter-spacing:.08em;text-transform:uppercase;cursor:pointer}
   @media (max-width:640px){.dash-lock{white-space:normal;flex-direction:column;text-align:center}}`;
 
+// POST /api/report-pdf with the reader's access token → the stamped PDF as a
+// file download. Resolves when the download starts; rejects when the server
+// says no (the caller then prints instead).
+export async function downloadLicensedPdf(frame, reportRef, lic) {
+  // loaded here, not at the top: this file is also read by the Node build
+  // scripts (apply-report-responsive.mjs), which must not pull in Supabase
+  const { supabase } = await import("./supabaseClient.js");
+  const { data } = await supabase.auth.getSession();
+  const token = data?.session?.access_token;
+  if (!token) throw new Error("sign_in");
+  // only the ref: the server stamps the profile behind the token (lic is the frame's copy of the same profile, for its own display)
+  void lic;
+  const r = await fetch("/api/report-pdf", {
+    method: "POST", cache: "no-store",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ ref: reportRef }),
+  });
+  if (!r.ok) throw new Error(String(r.status));
+  const blob = await r.blob();
+  const win = frame.ownerDocument.defaultView;
+  const url = win.URL.createObjectURL(blob);
+  const a = frame.ownerDocument.createElement("a");
+  a.href = url; a.download = `${reportRef}.pdf`; a.rel = "noopener";
+  frame.ownerDocument.body.appendChild(a); a.click(); a.remove();
+  win.setTimeout(() => win.URL.revokeObjectURL(url), 60_000);
+  return r.headers.get("x-licence-id") || "";
+}
+
 export function lockReportForFreeReader(doc, onSubscribe) {
   if (!doc || !doc.body) return 0;
+  // a preview (either design) is already cut down on the server side
+  if (doc.querySelector('[data-locked="preview"]')) return 0;
   if (!doc.getElementById("dash-lock-style")) {
     const st = doc.createElement("style"); st.id = "dash-lock-style"; st.textContent = LOCK_CSS;
     doc.head.appendChild(st);
@@ -46,6 +81,17 @@ export function lockReportForFreeReader(doc, onSubscribe) {
   return n;
 }
 
+// Phones (part of the responsive layer below): the shell's small uppercase
+// labels (8.5-10px: dossier keys, eyebrows, tags, vendor pills) all read at
+// 10.5px, the shell's own eyebrow size. Shared by the portrait (<=560px) and
+// landscape-phone blocks so the two never differ.
+const PHONE_LABELS =
+  ".r-vital .k,.r-rail-h,.r-conf-tag,.r-chain-n,.r-why .h,.r-guardrow-h,.r-chips-h,.r-victim-role,.r-sevtag," +
+  ".r-ctrlcard-owner,.r-fg-h,.r-vendor-map,.r-vendor-type,.r-vendor-ctrls-h,.r-vendor-ctrl-ac,.r-end-eyebrow," +
+  ".r-scn-trigger .lbl,.r-comp-impl .lbl,.r-mobnav-pill .rm-lab,.r-mobnav-sheet-h{font-size:10.5px}" +
+  // a long single word (a key, a value) wraps inside its dossier cell, never clipped
+  ".r-vital{overflow-wrap:anywhere}";
+
 // Responsive layer for the report shell (2026-10-07 responsive sweep). One
 // text, three carriers that must stay identical:
 //   - the 310 baked files, as <style id="attacked-resp"> before </head>
@@ -58,7 +104,7 @@ export function lockReportForFreeReader(doc, onSubscribe) {
 // scripts/apply-report-responsive.mjs (run it with --write after any change
 // here, then scripts/verify-report-responsive.mjs).
 export const REPORT_RESPONSIVE_CSS = [
-  "/* attacked-resp v3 (2026-10-08) */",
+  "/* attacked-resp v4 (2026-10-09) */",
   // 769-1080: one column, but keep the 720px reading measure; the stacked
   // document ends clear of the floating jump pill (~70px above the bottom)
   "@media(max-width:1080px){.r-doc{grid-template-columns:minmax(0,720px)}.reader .r-doc{padding-bottom:96px}}",
@@ -81,7 +127,7 @@ export const REPORT_RESPONSIVE_CSS = [
   ".r-ctrl .r-code{justify-self:start}",
   ".r-ctrl-obj,.r-ctrl-lnk{grid-column:1}",
   ".r-chip,.r-stat .s,.r-assessment,.r-cat-blurb,.r-vendor-dom{font-size:12px}",
-  ".r-vendor-type,.r-vendor-ctrl-ac,.r-chips-h,.r-mobnav-pill .rm-lab,.r-vendor-map{font-size:10px}",
+  PHONE_LABELS,
   ".r-pull{font-size:21px;padding-left:16px;margin:28px 0}",
   ".r-takeaway{padding:20px 18px}.r-takeaway p{font-size:16px}",
   ".r-ctrlcard,.r-scenario{padding:18px 16px}",
@@ -94,6 +140,14 @@ export const REPORT_RESPONSIVE_CSS = [
   // same small-text sizes as a portrait phone (no layout change)
   "@media(orientation:landscape) and (max-height:500px){.reader-bar{height:44px}.reader-scroll{top:44px}.r-mobnav-pill{bottom:8px;padding:7px 16px}.r-mobnav-sheet{bottom:58px}" +
     ".r-chip,.r-stat .s,.r-assessment,.r-cat-blurb,.r-vendor-dom{font-size:12px}.r-vendor-type,.r-vendor-ctrl-ac,.r-chips-h,.r-mobnav-pill .rm-lab,.r-vendor-map{font-size:10px}}",
+  // ...and the phone label sizes (a landscape phone is at most ~932px wide; a
+  // short laptop window is wider, so it keeps the shell's sizes)
+  "@media(orientation:landscape) and (max-height:500px) and (max-width:960px){" + PHONE_LABELS + "}",
+  // two-up stat cards, the stacked control-card halves and the vendor control
+  // rows (<=640px): a long word ('OpenSourceMalware', 'BeaverTail/InvisibleFerret')
+  // wraps inside its card instead of being cut off at the card edge or pushing
+  // the control code out of it (the shell already does this for the big number)
+  "@media(max-width:640px){.r-stat,.r-fg>div,.r-vendor-ctrl-t{overflow-wrap:anywhere}}",
   // vendor cards: a control code never splits across lines. Cards narrower
   // than ~478px (every 2-up card, phones) put the type pill and the code chip
   // on their own row under the vendor name; wider cards keep the one-row head.
@@ -146,10 +200,56 @@ function addMobileNav(doc) {
 
 // Stamp the licence line the report prints, hide any in-report navigation the
 // host page owns, and gate the subscriber sections for free readers.
-export function prepareReportFrame(frame, { subscriber, onSubscribe, readerName } = {}) {
+// The licence a report prints and stamps: the reader's profile as the site
+// already knows it (sign-up asks for name, job title, company and industry;
+// the account email is the login). Nothing is typed inside the report.
+export function readerLicence(profile, user, subscriber) {
+  const name = (profile && profile.full_name) || (user && user.user_metadata && user.user_metadata.full_name) || (user && user.email) || "";
+  return {
+    name: name || "Registered reader",
+    title: (profile && profile.role) || "",
+    company: (profile && profile.company) || "",
+    email: (profile && profile.email) || (user && user.email) || "",
+    industry: (profile && profile.industry) || "",
+    tier: (profile && profile.tier) || (subscriber ? "enterprise" : "free"),
+    avatar: (profile && profile.avatar_url) || "",
+    subscriber: !!subscriber,
+    role: [profile && profile.role, profile && profile.company].filter(Boolean).join(" \u00b7 ") || (subscriber ? "Subscriber" : "Free reader"),
+  };
+}
+
+// The broadcast for the frame. The v5 shell carries a broadcast card after the
+// Executive Summary (podCard/applyBroadcast in the report); the host hands the
+// published episode over as window.__ATTACKED_BROADCAST__ (frameBroadcast()
+// shape: series, episode, title, url, page, duration, note, hosts) and fires
+// 'attacked-broadcast', and the card re-renders itself with a working player.
+// null = known to have none (the card keeps its baked "coming soon" line).
+// Returns true when the shell has a card of its own, so the host can keep its
+// own bar only for shells without one (the 310 v4 files).
+export function applyBroadcastToFrame(frame, broadcast) {
+  let doc, win;
+  try { doc = frame.contentDocument; win = frame.contentWindow; } catch { return false; }
+  if (!doc || !win || !doc.body || !doc.body.children.length) return false;
+  try {
+    win.__ATTACKED_BROADCAST__ = broadcast ? { ...broadcast } : null;
+    try { win.dispatchEvent(new win.Event("attacked-broadcast")); } catch { /* older frame */ }
+  } catch { return false; }
+  return !!doc.getElementById("podCard") || typeof win.applyBroadcast === "function";
+}
+
+export function prepareReportFrame(frame, { subscriber, onSubscribe, readerName, reportRef, reader } = {}) {
   let doc; try { doc = frame.contentDocument; } catch { return false; }
   if (!doc || !doc.body || !doc.body.children.length) return false;
-  try { frame.contentWindow.__ATTACKED_LICENSE__ = { name: readerName || "Registered reader", role: subscriber ? "Subscriber" : "Free reader" }; } catch { /* noop */ }
+  try {
+    const win = frame.contentWindow;
+    win.__ATTACKED_LICENSE__ = reader ? { ...reader } : { name: readerName || "Registered reader", role: subscriber ? "Subscriber" : "Free reader", subscriber: !!subscriber };
+    try { win.dispatchEvent(new win.Event("attacked-licence")); } catch { /* older frame */ }
+  } catch { /* noop */ }
+  // The licensed PDF (v5 shell: the report's "Download now" calls this after its
+  // licence gate). A subscriber gets the print edition stamped with the name and
+  // role they typed, from /api/report-pdf; a report without a print edition
+  // (404) falls back to the frame's own print dialog.
+  try { frame.contentWindow.__ATTACKED_PDF_DOWNLOAD__ = subscriber && reportRef ? (lic) => downloadLicensedPdf(frame, reportRef, lic) : undefined; } catch { /* noop */ }
   // .r-bar-back: the frame's own "← Back" sits under the host's back button
   // (Hub, dashboard) at <=1080px; the host owns navigation, so hide it.
   doc.querySelectorAll('a[href*="?hub"], .r-back, .r-bar-back').forEach((el) => { el.style.display = "none"; });
@@ -177,6 +277,13 @@ export function prepareReportFrame(frame, { subscriber, onSubscribe, readerName 
     host.addEventListener("resize", keep);
   }
   if (frame.__pillKeep) frame.__pillKeep();
+  // The editorial v3 shell (the NATS briefing) ships its header Download PDF
+  // hidden; a subscriber gets it (browser print → Save as PDF).
+  if (subscriber && doc.querySelector(".hdr-btn#readerPrint") && !doc.getElementById("attacked-sub-pdf")) {
+    const st = doc.createElement("style"); st.id = "attacked-sub-pdf";
+    st.textContent = "#readerPrint{display:inline-flex!important}";
+    doc.head.appendChild(st);
+  }
   if (!subscriber) lockReportForFreeReader(doc, onSubscribe);
   return true;
 }

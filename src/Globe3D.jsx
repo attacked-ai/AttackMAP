@@ -188,6 +188,20 @@ function clamp2D(viewer) {
   if (moved) { cam.position.x = x; cam.position.y = y; }
 }
 
+// Set the 2D view's half WIDTH directly, keeping the canvas aspect. This is
+// what Cesium's own 2D zoomIn/zoomOut do to the frustum, minus one trap: on a
+// canvas taller than wide they apply the amount to the VERTICAL extent, so a
+// width-based amount came out height/width times too small and a portrait
+// phone's flat world was left at ~55-67% of the width.
+function setFlatHalfWidth(cam, halfW) {
+  const f = cam.frustum;
+  const ratio = f.top / f.right;
+  f.right = halfW;
+  f.left = -halfW;
+  f.top = halfW * ratio;
+  f.bottom = -f.top;
+}
+
 // Frame the whole world, centred and filling the viewport's width, in the
 // flat view. setView() with a rectangle CONTAINS it (bars on one axis), so the
 // frustum is then widened or narrowed to the exact world width.
@@ -196,12 +210,7 @@ function frameFlatWorld(viewer) {
   const cam = viewer.camera;
   cam.setView({ destination: Cesium.Rectangle.fromDegrees(-180, -FLAT_LAT_LIMIT, 180, FLAT_LAT_LIMIT) });
   const f = cam.frustum;
-  if (Cesium.defined(f.left)) {
-    const halfW = (f.right - f.left) / 2;
-    const target = flatMaxHalfWidth(viewer);
-    if (halfW > target) cam.zoomIn((halfW - target) * 2);
-    else if (halfW < target) cam.zoomOut((target - halfW) * 2);
-  }
+  if (Cesium.defined(f.left) && f.right > 0 && f.top > 0) setFlatHalfWidth(cam, flatMaxHalfWidth(viewer));
   clamp2D(viewer);
   viewer.scene.requestRender();
 }
@@ -243,8 +252,7 @@ function zoomByFactor(viewer, factor) {
     if (!Cesium.defined(f.left)) return;
     const halfW = (f.right - f.left) / 2;
     const target = Math.min(flatMaxHalfWidth(viewer), Math.max(FLAT_MIN_HALF_WIDTH, halfW * factor));
-    if (target < halfW) cam.zoomIn((halfW - target) * 2);
-    else if (target > halfW) cam.zoomOut((target - halfW) * 2);
+    if (target !== halfW && f.right > 0 && f.top > 0) setFlatHalfWidth(cam, target);
     clamp2D(viewer);
   } else {
     const h = cam.positionCartographic.height;

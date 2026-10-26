@@ -1130,6 +1130,7 @@ async function _fetchSupabaseTable(url, key, table, query = "") {
       });
       if (!res.ok && res.status !== 206) {
         console.warn(`Supabase ${table} fetch failed: ${res.status} ${res.statusText}`);
+        all.incomplete = true;
         return all;
       }
       const rows = await res.json();
@@ -1138,10 +1139,148 @@ async function _fetchSupabaseTable(url, key, table, query = "") {
       if (rows.length < PAGE) break;
     } catch (e) {
       console.warn(`Supabase ${table} fetch error:`, e?.message || e);
+      all.incomplete = true;
       break;
     }
   }
   return all;
+}
+
+// The full incident list is the map's biggest download (~2,300 rows, several
+// MB). Both the fast paint and the full boot need it, and before 2026-10-12
+// each fetched it separately, so every visit downloaded it twice. That, plus
+// test loops, used up the Supabase Free egress allowance (5 GB/month).
+// Now: ONE download per page load, shared by both callers, and a 15-minute
+// copy in the browser's Cache Storage so a reload does not download it again.
+// Only signed-out loads are kept, and only when every page came back.
+// The long text (summary 3.3 MB, severity_rationale 1.7 MB) is left out of the
+// list: 6.6 MB -> 1.5 MB per load (2026-10-15). The incident someone opens
+// fetches its own (useIncidentText), and the search box finds words in
+// summaries through useSummarySearch.
+const INCIDENT_LIST_COLS = "id,headline,entity,sector,industry,location_name,country,latitude,longitude,event_date,disclosure_date,incident_day,primary_category,primary_subcategory_code,primary_subcategory_name,severity,confidence,image_url";
+const INCIDENT_CACHE = "attacked-incidents-v1";
+const INCIDENT_CACHE_TTL_MS = 15 * 60 * 1000;
+let _incidentRowsP = null;
+
+async function _readIncidentCache(url) {
+  try {
+    if (typeof caches === "undefined") return null;
+    const c = await caches.open(INCIDENT_CACHE);
+    const hit = await c.match(url);
+    if (!hit) return null;
+    const at = Number(hit.headers.get("x-saved-at")) || 0;
+    if (Date.now() - at > INCIDENT_CACHE_TTL_MS) return null;
+    const rows = await hit.json();
+    return Array.isArray(rows) && rows.length ? rows : null;
+  } catch { return null; }
+}
+
+async function _writeIncidentCache(url, rows) {
+  try {
+    if (typeof caches === "undefined") return;
+    const c = await caches.open(INCIDENT_CACHE);
+    await c.put(url, new Response(JSON.stringify(rows), {
+      headers: { "content-type": "application/json", "x-saved-at": String(Date.now()) },
+    }));
+  } catch { /* storage full or blocked: just skip the cache */ }
+}
+
+function _fetchIncidentRows(url, key) {
+  if (!_incidentRowsP) {
+    _incidentRowsP = (async () => {
+      const query = `select=${INCIDENT_LIST_COLS}&incident_day=not.is.null&latitude=not.is.null&longitude=not.is.null&order=incident_day.desc&limit=10000`;
+      const cacheKey = `${url.replace(/\/$/, "")}/rest/v1/incidents?${query}`;
+      const signedOut = !_readerToken;
+      if (signedOut) {
+        const cached = await _readIncidentCache(cacheKey);
+        if (cached) return cached;
+      }
+      const rows = await _fetchSupabaseTable(url, key, "incidents", query);
+      if (rows.incomplete || rows.length === 0) {
+        _incidentRowsP = null;   // let the next caller try again
+      } else if (signedOut) {
+        _writeIncidentCache(cacheKey, rows);
+      }
+      return rows;
+    })();
+  }
+  // Callers add fields to the rows, so each gets its own shallow copies.
+  return _incidentRowsP.then((rows) => rows.map((r) => ({ ...r })));
+}
+
+function _restUrl(path) {
+  const env = (typeof import.meta !== "undefined" && import.meta.env) || {};
+  const url = env.VITE_SUPABASE_URL, key = env.VITE_SUPABASE_ANON_KEY;
+  if (!url || !key || typeof fetch !== "function") return null;
+  return {
+    href: `${url.replace(/\/$/, "")}/rest/v1/${path}`,
+    headers: { apikey: key, Authorization: `Bearer ${_readerToken || key}` },
+  };
+}
+
+// One incident's summary + severity_rationale (a few KB), kept for the visit.
+// A failed fetch is forgotten so the next open tries again.
+const _incidentText = new Map();
+function _fetchIncidentText(id) {
+  if (!_incidentText.has(id)) {
+    const req = _restUrl(`incidents?select=summary,severity_rationale&id=eq.${encodeURIComponent(id)}&limit=1`);
+    const p = !req ? Promise.resolve(null) : fetch(req.href, { headers: req.headers })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((rows) => (Array.isArray(rows) && rows[0]) || null)
+      .catch(() => null);
+    p.then((t) => { if (!t) _incidentText.delete(id); });
+    _incidentText.set(id, p);
+  }
+  return _incidentText.get(id);
+}
+
+// The opened incident, with its text once it arrives (the panel renders at
+// once; the text fills in). Incidents that already carry their text, such as
+// the baked sweeps, are returned as they are.
+function useIncidentText(incident) {
+  const id = incident?.id;
+  const missing = id != null && !("summary" in incident) && !("severity_rationale" in incident);
+  const [text, setText] = useState(null);
+  useEffect(() => {
+    if (!missing) return undefined;
+    let live = true;
+    _fetchIncidentText(id).then((t) => { if (live && t) setText({ id, ...t }); });
+    return () => { live = false; };
+  }, [id, missing]);
+  return useMemo(() => (
+    missing && text && text.id === id
+      ? { ...incident, summary: text.summary, severity_rationale: text.severity_rationale }
+      : incident
+  ), [incident, missing, text, id]);
+}
+
+// The search box matched summaries when the list carried them. It still does:
+// a typed query (3+ characters, after a pause) asks the database for the ids
+// whose summary contains it — ids only, a few KB. null until it answers.
+const _summaryHits = new Map();
+function useSummarySearch(query) {
+  const q = String(query || "").trim().toLowerCase();
+  const [hits, setHits] = useState(null);
+  useEffect(() => {
+    setHits(_summaryHits.get(q) || null);
+    if (q.length < 3 || _summaryHits.has(q)) return undefined;
+    let live = true;
+    const t = setTimeout(() => {
+      const req = _restUrl(`incidents?select=id&summary=ilike.${encodeURIComponent(`*${q}*`)}&limit=1000`);
+      if (!req) return;
+      fetch(req.href, { headers: req.headers })
+        .then((res) => (res.ok ? res.json() : null))
+        .then((rows) => {
+          if (!Array.isArray(rows)) return;
+          const ids = new Set(rows.map((r) => r.id));
+          _summaryHits.set(q, ids);
+          if (live) setHits(ids);
+        })
+        .catch(() => {});
+    }, 400);
+    return () => { live = false; clearTimeout(t); };
+  }, [q]);
+  return hits;
 }
 
 // Reshape a flat incidents row + its embedded child arrays into the nested
@@ -1269,23 +1408,14 @@ async function loadFromSupabase() {
   // the columns the renderer actually uses; debug/internal columns like
   // pass3_response_head, velocity_*, etc. are excluded. Children are stitched
   // onto their parent incident client-side via incident_id lookup maps.
-  const q = "limit=10000";
-  const incidentCols = [
-    "id", "headline", "summary", "entity", "sector", "industry",
-    "location_name", "country",
-    "latitude", "longitude", "event_date", "disclosure_date", "incident_day",
-    "primary_category", "primary_subcategory_code", "primary_subcategory_name",
-    "image_url", // the stored picture (incident-images function), 2026-09-23
-    // PostgREST rejects the WHOLE select when any single column is unknown, so
-    // a single stale name here takes down the only query that loads live
-    // incidents, and every visitor silently falls back to the sweep files
-    // baked into public/sweeps/ (which stop at 2026-05-28). That is exactly
-    // how the "map isn't populating day by day" outage happened, via
-    // `confidence` being named after it was dropped from the view. It has
-    // since been restored to public.incidents from the sweep.incidents base
-    // table. Never add a column here without first confirming it exists.
-    "severity", "severity_rationale", "confidence",
-  ].join(",");
+  // The incident columns live in INCIDENT_LIST_COLS (next to _fetchIncidentRows).
+  // PostgREST rejects the WHOLE select when any single column is unknown, so
+  // a single stale name there takes down the only query that loads live
+  // incidents, and every visitor silently falls back to the sweep files
+  // baked into public/sweeps/ (which stop at 2026-05-28). That is exactly
+  // how the "map isn't populating day by day" outage happened, via
+  // `confidence` being named after it was dropped from the view. Never add a
+  // column there without first confirming it exists on public.incidents.
   const viIncidentCols = [
     "id", "vi_sweep_id",
     "headline", "summary", "entity", "sector", "industry",
@@ -1312,8 +1442,7 @@ async function loadFromSupabase() {
   //      exactly as blast_radius already was.
   // ────────────────────────────────────────────────────────────────────
   const [regularRows, reporterRows] = await Promise.all([
-    _fetchSupabaseTable(url, key, "incidents",
-      `select=${incidentCols}&incident_day=not.is.null&latitude=not.is.null&longitude=not.is.null&order=incident_day.desc&${q}`),
+    _fetchIncidentRows(url, key),
     _fetchSupabaseTable(url, key, "reporters", "select=slug,name,desk,cats,color&limit=200"),
   ]);
   // vi_* incidents were dropped from the database on 2026-07-28; keep the
@@ -1463,15 +1592,12 @@ async function loadIncidentsFast(preferDay = null, incidentId = null) {
   const env = (typeof import.meta !== "undefined" && import.meta.env) || {};
   const url = env.VITE_SUPABASE_URL, key = env.VITE_SUPABASE_ANON_KEY;
   if (!url || !key) return null;
-  // Keep this list in lockstep with incidentCols in loadFromSupabase — a name
-  // that is not on public.incidents 400s this fast-paint query and drops the
-  // first render back to the baked May sweeps. See the note there.
-  const cols = "id,headline,summary,entity,sector,industry,location_name,country,latitude,longitude,event_date,disclosure_date,incident_day,primary_category,primary_subcategory_code,primary_subcategory_name,severity,severity_rationale,confidence,image_url";
+  // Shares one download with loadFromSupabase (see _fetchIncidentRows).
   try {
     // vi_incidents / vi_sweeps were dropped on 2026-07-28. They 404'd on every
     // single page load; keep the downstream shape with empty arrays instead.
     const [reg, reporters] = await Promise.all([
-      _fetchSupabaseTable(url, key, "incidents", `select=${cols}&incident_day=not.is.null&latitude=not.is.null&longitude=not.is.null&order=incident_day.desc&limit=10000`),
+      _fetchIncidentRows(url, key),
       _fetchSupabaseTable(url, key, "reporters", "select=slug,name,desk,cats,color&limit=200"),
     ]);
     const vi = [], sweeps = [];
@@ -4416,6 +4542,41 @@ function shortEntity(raw) {
 // anchored to a different corner. Arrows advance through scenes.
 // ─────────────────────────────────────────────────────────────────────────────
 
+// IncidentCardBoundary — a render error inside one incident card (a body, its
+// picture, or the whole deck / cascade) used to unmount the entire app and
+// leave a blank page (2026-10-09: an unbound call in MapIncidentImage blanked
+// the map in production). The boundary swaps only the broken part for a small
+// note, so the map, nav and controls stay usable. `resetKey` lets it try again
+// when the incident data changes (child records hydrate into a new object).
+class IncidentCardBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { error: null };
+  }
+  static getDerivedStateFromError(error) {
+    return { error };
+  }
+  componentDidCatch(error, info) {
+    try { console.error("Incident card render error (contained):", error, info && info.componentStack); } catch { /* noop */ }
+  }
+  componentDidUpdate(prevProps) {
+    if (this.state.error && prevProps.resetKey !== this.props.resetKey) this.setState({ error: null });
+  }
+  render() {
+    if (!this.state.error) return this.props.children;
+    if (this.props.fallback !== undefined) return this.props.fallback;
+    return (
+      <div role="note" style={{
+        padding: "12px 14px", margin: "4px 0 12px",
+        background: "rgba(255,107,107,0.06)", border: "1px solid rgba(255,107,107,0.25)", borderRadius: 0,
+        fontFamily: "Inter, sans-serif", fontSize: 12, lineHeight: 1.5, color: "rgba(255,255,255,0.72)",
+      }}>
+        This part of the incident card could not be displayed.
+      </div>
+    );
+  }
+}
+
 // MobileIncidentCards — the phone-native incident detail. A full-screen deck of
 // swipe cards (one per cascade slot: Classification, Blast Radius, Controls,
 // Peers, History, Vendors). Native CSS scroll-snap drives the swipe; dots +
@@ -4427,7 +4588,11 @@ function MobileIncidentCards({ incident, cards, onClose, autoPlay, onSkip }) {
   const [voiceOn, setVoiceOn] = useState(false);
   const N = cards.length;
 
-  const stopAuto = () => setAuto(false);
+  // Set while Play on the last card scrolls the deck back to card 1, so the
+  // scroll events of that trip (cards N..2) do not land on the last card again
+  // and end the preview before it restarts.
+  const restartRef = useRef(false);
+  const stopAuto = () => { restartRef.current = false; setAuto(false); };
 
   // Desktop-tour-style explanation for each card type — the same plain-language
   // framing the desktop walkthrough uses, mapped to the mobile cards.
@@ -4468,7 +4633,20 @@ function MobileIncidentCards({ incident, cards, onClose, autoPlay, onSkip }) {
   function onScroll() {
     const el = trackRef.current; if (!el || !el.clientWidth) return;
     const i = Math.round(el.scrollLeft / el.clientWidth);
+    if (restartRef.current) { if (i !== 0) return; restartRef.current = false; }
     setIdx(prev => (i !== prev ? Math.max(0, Math.min(N - 1, i)) : prev));
+  }
+  // Play / Pause. Play on the last card (the preview has ended there) starts
+  // the walkthrough again from card 1.
+  function togglePlay() {
+    if (auto) { stopAuto(); return; }
+    if (idx >= N - 1 && N > 1) {
+      restartRef.current = true;
+      setTimeout(() => { restartRef.current = false; }, 3000);   // safety net; normally cleared on arrival
+      setIdx(0);
+      goto(0);
+    }
+    setAuto(true);
   }
   function goto(i) {
     const el = trackRef.current; if (!el) return;
@@ -4534,7 +4712,7 @@ function MobileIncidentCards({ incident, cards, onClose, autoPlay, onSkip }) {
         </div>
         {autoPlay && (
           <>
-            <button onClick={() => setAuto(a => !a)} aria-label={auto ? "Pause" : "Play"} title={auto ? "Pause" : "Play"} style={{
+            <button onClick={togglePlay} aria-label={auto ? "Pause" : "Play"} title={auto ? "Pause" : "Play"} style={{
               width: 34, height: 34, borderRadius: 0, flexShrink: 0,
               background: "rgba(252,189,0,0.12)", border: "1px solid rgba(252,189,0,0.4)",
               color: "#FCBD00", fontSize: 13, cursor: "pointer",
@@ -4571,7 +4749,7 @@ function MobileIncidentCards({ incident, cards, onClose, autoPlay, onSkip }) {
             <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase", color: "#fff", marginBottom: 14 }}>
               {card.label}
             </div>
-            {card.render()}
+            <IncidentCardBoundary resetKey={incident}>{card.render()}</IncidentCardBoundary>
           </div>
         ))}
       </div>
@@ -4616,7 +4794,9 @@ function MobileIncidentCards({ incident, cards, onClose, autoPlay, onSkip }) {
   );
 }
 
-function IncidentCascade({ incident, viewMode, onClose, autoPlay, onSkip }) {
+function IncidentCascade({ incident: listed, viewMode, onClose, autoPlay, onSkip }) {
+  // The map's list leaves the long text out; the opened incident fetches it.
+  const incident = useIncidentText(listed);
   if (!incident) return null;
   const sev = SEVERITY[incident.severity] || SEVERITY[3];
   const cat = CATEGORIES[incident._cat];
@@ -4891,7 +5071,7 @@ function IncidentCascade({ incident, viewMode, onClose, autoPlay, onSkip }) {
             {/* Body — re-mounts on scene change so the row-stagger
                 animations replay cleanly */}
             <div className="scene-panel-body" key={safeIndex}>
-              {slot.render()}
+              <IncidentCardBoundary resetKey={incident}>{slot.render()}</IncidentCardBoundary>
             </div>
 
             {/* Footer — only on the last panel of the scene. Holds the
@@ -5154,8 +5334,11 @@ function ClassificationBody({ incident, sev, cat }) {
         </div>
       )}
 
-      {/* Render the incident-specific image or clean branded fallback */}
-      <MapIncidentImage incident={incident} />
+      {/* Render the incident-specific image or clean branded fallback. A
+          broken picture drops out on its own; the card text stays. */}
+      <IncidentCardBoundary fallback={null} resetKey={incident}>
+        <MapIncidentImage incident={incident} />
+      </IncidentCardBoundary>
 
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12 }}>
         <span style={{
@@ -5350,6 +5533,7 @@ function BlastRadiusBody({ incident, channels }) {
                   chevron rotates 90° when expanded so users see the
                   state without reading. */}
               <div
+                className="br-row"
                 onClick={() => {
                   // Teaser model: first channel is the public reveal — let
                   // public viewers expand it to see real entity detail.
@@ -8581,7 +8765,7 @@ function AuditDrawer({ incidents, onClose }) {
                 <td style={{ padding: "10px 8px", color: BRAND.white, verticalAlign: "top", maxWidth: 360 }}>
                   <div style={{ marginBottom: row.url ? 4 : 0 }}>{row.title}</div>
                   {row.url && (
-                    <a href={row.url} target="_blank" rel="noreferrer"
+                    <a className="map-audit-src" href={row.url} target="_blank" rel="noreferrer"
                       style={{ color: BRAND.textMuted, fontSize: 10, fontFamily: "Inter, sans-serif", textDecoration: "none", wordBreak: "break-all" }}>
                       {row.url}
                     </a>
@@ -8799,7 +8983,7 @@ function ArchivePanel({ archiveIndex, currentDate, onLoad, onDelete, onClose, bu
 
             {timeline.playDates.length > 0 && (
               <div style={{ marginTop: 12 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                <div className="map-play-row" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
                   <span style={{ fontFamily: "Inter, sans-serif", fontSize: 14, fontWeight: 800, color: timeline.playing ? BRAND.gold : BRAND.white }}>{cur || "—"}</span>
                   <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
                     <button onClick={() => timeline.onPlayBrief && timeline.onPlayBrief()}
@@ -9070,6 +9254,7 @@ export default function GlobalAttackMap() {
   const [showFilterPopover, setShowFilterPopover] = useState(false);
   // v3 additions
   const [searchQuery, setSearchQuery] = useState(""); // substring search
+  const summaryHits = useSummarySearch(searchQuery);   // ids whose summary matches (not in the list)
 
   // v4 archive — persistent day-wise storage of uploaded sweeps. The index
   // is loaded once on mount and refreshed whenever a sweep is added or
@@ -9403,10 +9588,10 @@ export default function GlobalAttackMap() {
     }
     // Search filter (v3 — empty = all)
     if (searchQuery && searchQuery.trim()) {
-      filtered = filtered.filter(inc => searchMatches(inc, searchQuery));
+      filtered = filtered.filter(inc => searchMatches(inc, searchQuery) || !!summaryHits?.has(inc.id));
     }
     return filtered;
-  }, [incidents, activeCats, activeReporters, activeSeverities, activeConfidences, activeIndustries, activeCountries, searchQuery, reporters]);
+  }, [incidents, activeCats, activeReporters, activeSeverities, activeConfidences, activeIndustries, activeCountries, searchQuery, summaryHits, reporters]);
 
   const visibleCats = useMemo(() => new Set(visibleIncidents.map(i => i._cat)), [visibleIncidents]);
 
@@ -9972,6 +10157,16 @@ export default function GlobalAttackMap() {
   // Bumped each time the day narration restarts, so a chain left over from
   // a previous day stops speaking instead of interleaving with the new one.
   const daySegTokenRef = useRef(0);
+  // Phone layout with the Timeline sheet open: a narrated incident opened the
+  // full-screen card deck over the sheet, hiding Pause / Brief. There, only
+  // highlight its place on the map (hover focus) and leave the sheet usable.
+  // A ref, because the narration chain outlives the render that started it.
+  const narrOverSheetRef = useRef(false);
+  narrOverSheetRef.current = isMobile && showArchive;
+  const narrFocus = (id) => {
+    if (narrOverSheetRef.current) { setHoveredId(id); return; }
+    setSelectedId(id);
+  };
   const [briefPlaying, setBriefPlaying] = useState(false);
   const [briefCaption, setBriefCaption] = useState("");
 
@@ -10023,7 +10218,7 @@ export default function GlobalAttackMap() {
       if (idx >= segs.length) { stopBrief(); return; }
       const seg = segs[idx++];
       setBriefCaption(seg.text);
-      if (seg.id != null) { try { setSelectedId(String(seg.id)); } catch { /* noop */ } }
+      if (seg.id != null) { try { narrFocus(String(seg.id)); } catch { /* noop */ } }
       const u = new SpeechSynthesisUtterance(seg.text);
       // News-anchor pace. This used to run at 1.28/1.12, which outran the ear —
       // place names and entity names in particular arrived faster than they
@@ -10119,16 +10314,18 @@ export default function GlobalAttackMap() {
       // timeline has advanced — without it two days could interleave.
       const myToken = ++daySegTokenRef.current;
       let idx = 0;
+      let hovered = false;   // the chain highlighted (not opened) an incident
       const next = () => {
         if (myToken !== daySegTokenRef.current) return;   // superseded
         if (idx >= segs.length) {
           // Close the last preview so the map is clean before the next day.
-          try { setSelectedId(null); } catch { /* noop */ }
+          try { setSelectedId(null); if (hovered) setHoveredId(null); } catch { /* noop */ }
           return;
         }
         const seg = segs[idx++];
-        // Open this incident's card while its line is spoken.
-        if (seg.id != null) { try { setSelectedId(String(seg.id)); } catch { /* noop */ } }
+        // Open this incident's card while its line is spoken (phone + open
+        // Timeline sheet: highlight it on the map instead, see narrFocus).
+        if (seg.id != null) { try { if (narrOverSheetRef.current) hovered = true; narrFocus(String(seg.id)); } catch { /* noop */ } }
         else if (idx === 1) { try { setSelectedId(null); } catch { /* noop */ } }
         const u = new SpeechSynthesisUtterance(seg.text);
         u.rate = 0.95; u.pitch = 1; u.volume = 1;   // match the Brief's pace
@@ -10139,12 +10336,19 @@ export default function GlobalAttackMap() {
         try { synth.speak(u); } catch { setTimeout(next, 300); }
       };
       next();
+      // Pause, narration off, or a new day: retire this chain at once. The
+      // cancel() below fires onerror on the line being spoken, and without
+      // this its next() still passed the token check and kept opening cards.
+      return () => { if (daySegTokenRef.current === myToken) daySegTokenRef.current++; };
     }
   }, [currentDate, playing, narrate, visibleIncidents]);
 
   // Silence narration the moment playback stops or pauses — but NOT while the
   // daily brief is intentionally playing (the brief pauses autoplay itself).
+  // The token bump stops the narrated-incident chain too (it must not open
+  // another card after Pause).
   useEffect(() => {
+    if (!playing) daySegTokenRef.current++;
     if (!playing && !briefActiveRef.current) { try { window.speechSynthesis && window.speechSynthesis.cancel(); } catch { /* noop */ } }
   }, [playing]);
 
@@ -10253,7 +10457,7 @@ export default function GlobalAttackMap() {
       {/* MOBILE — Layers bottom sheet: map mode, view mode, layer toggles, key */}
       {isMobile && showLayers && (
         <div onClick={() => setShowLayers(false)} style={{ position: "fixed", inset: 0, zIndex: 120, background: "rgba(0,0,0,0.55)" }}>
-          <div onClick={e => e.stopPropagation()} style={{
+          <div className="map-layers-sheet" onClick={e => e.stopPropagation()} style={{
             position: "absolute", left: 0, right: 0, bottom: 0,
             background: "#141416", borderTop: "1px solid #333", borderRadius: 0,
             padding: "16px 16px calc(22px + env(safe-area-inset-bottom))", maxHeight: "82vh", overflowY: "auto",
@@ -10500,7 +10704,10 @@ export default function GlobalAttackMap() {
               const xs = { cursor: "pointer", opacity: 0.7, fontSize: 12, lineHeight: 1 };
               return (
                 <div className="r-hide" style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
-                  <button onClick={() => setFiltersOpen(o => !o)} title="Filter the map"
+                  {/* Filters and Timeline open in the same corner: opening one
+                      closes the other (as the phone bar does), or the Timeline
+                      (z 30) hid the Filters drawer the user had just opened. */}
+                  <button onClick={() => { if (!filtersOpen) setShowArchive(false); setFiltersOpen(!filtersOpen); }} title="Filter the map"
                     style={{
                       padding: "6px 14px", borderRadius: 0,
                       background: (filtersOpen || fCount > 0) ? "rgba(252,189,0,0.14)" : "rgba(36,36,36,0.85)",
@@ -10513,7 +10720,7 @@ export default function GlobalAttackMap() {
                     ⛃ Filters{fCount > 0 ? ` · ${fCount}` : ""}
                   </button>
                   {/* Threat Timeline — grouped with Filters (both scope "what you're viewing"). */}
-                  <button onClick={() => setShowArchive(true)}
+                  <button onClick={() => { setShowArchive(true); setFiltersOpen(false); setIndustryPanelOpen(false); setRegionPanelOpen(false); setShowFilterPopover(false); }}
                     title={`${archiveIndex.length} day${archiveIndex.length === 1 ? "" : "s"} of intelligence`}
                     style={{
                       padding: "6px 14px", borderRadius: 0,
@@ -10528,24 +10735,26 @@ export default function GlobalAttackMap() {
                       <span style={{ padding: "1px 5px", background: BRAND.gold, color: BRAND.obsidian, borderRadius: 0, fontSize: 9 }}>{archiveIndex.length}</span>
                     )}
                   </button>
+                  {/* map-chip / map-chip-more / map-clearall: map-responsive.css
+                      gives them a solid backing over bright terrain. */}
                   {activeSeverities.size > 0 && (
-                    <span style={chip}>Critical+<span style={xs} onClick={() => setActiveSeverities(new Set())}>×</span></span>
+                    <span className="map-chip" style={chip}>Critical+<span style={xs} onClick={() => setActiveSeverities(new Set())}>×</span></span>
                   )}
                   {[...activeCats].map(code => (
-                    <span key={code} style={chip}>{code}<span style={xs} onClick={() => setActiveCats(prev => { const n = new Set(prev); n.delete(code); return n; })}>×</span></span>
+                    <span key={code} className="map-chip" style={chip}>{code}<span style={xs} onClick={() => setActiveCats(prev => { const n = new Set(prev); n.delete(code); return n; })}>×</span></span>
                   ))}
                   {[...activeIndustries].slice(0, 3).map(ind => (
-                    <span key={ind} style={chip}>{String(ind).slice(0, 16)}<span style={xs} onClick={() => setActiveIndustries(prev => { const n = new Set(prev); n.delete(ind); return n; })}>×</span></span>
+                    <span key={ind} className="map-chip" style={chip}>{String(ind).slice(0, 16)}<span style={xs} onClick={() => setActiveIndustries(prev => { const n = new Set(prev); n.delete(ind); return n; })}>×</span></span>
                   ))}
-                  {activeIndustries.size > 3 && <span style={{ ...chip, background: "rgba(255,255,255,0.06)", color: BRAND.textSecondary, border: `1px solid ${BRAND.borderSubtle}` }}>+{activeIndustries.size - 3}</span>}
-                  
+                  {activeIndustries.size > 3 && <span className="map-chip-more" style={{ ...chip, background: "rgba(255,255,255,0.06)", color: BRAND.textSecondary, border: `1px solid ${BRAND.borderSubtle}` }}>+{activeIndustries.size - 3}</span>}
+
                   {[...activeCountries].slice(0, 3).map(country => (
-                    <span key={country} style={chip}>{String(country).slice(0, 16)}<span style={xs} onClick={() => setActiveCountries(prev => { const n = new Set(prev); n.delete(country); return n; })}>×</span></span>
+                    <span key={country} className="map-chip" style={chip}>{String(country).slice(0, 16)}<span style={xs} onClick={() => setActiveCountries(prev => { const n = new Set(prev); n.delete(country); return n; })}>×</span></span>
                   ))}
-                  {activeCountries.size > 3 && <span style={{ ...chip, background: "rgba(255,255,255,0.06)", color: BRAND.textSecondary, border: `1px solid ${BRAND.borderSubtle}` }}>+{activeCountries.size - 3}</span>}
-                  
+                  {activeCountries.size > 3 && <span className="map-chip-more" style={{ ...chip, background: "rgba(255,255,255,0.06)", color: BRAND.textSecondary, border: `1px solid ${BRAND.borderSubtle}` }}>+{activeCountries.size - 3}</span>}
+
                   {fCount > 0 && (
-                    <button onClick={() => { setActiveSeverities(new Set()); setActiveCats(new Set()); setActiveIndustries(new Set()); setActiveCountries(new Set()); }}
+                    <button className="map-clearall" onClick={() => { setActiveSeverities(new Set()); setActiveCats(new Set()); setActiveIndustries(new Set()); setActiveCountries(new Set()); }}
                       style={{ background: "none", border: "none", color: BRAND.textSecondary, fontSize: 10, letterSpacing: "0.08em", textTransform: "uppercase", cursor: "pointer", fontFamily: "Inter, sans-serif" }}>Clear all</button>
                   )}
                 </div>
@@ -10994,7 +11203,7 @@ export default function GlobalAttackMap() {
                 })}
               </div>
               {/* Clear all + fleet/audit buttons */}
-              <div style={{ display: "flex", gap: 6, paddingTop: 10, borderTop: `1px solid ${BRAND.borderSubtle}` }}>
+              <div className="map-popover-actions" style={{ display: "flex", gap: 6, paddingTop: 10, borderTop: `1px solid ${BRAND.borderSubtle}` }}>
                 <button onClick={() => {
                     setActiveReporters(new Set());
                     setActiveCats(new Set());
@@ -11163,7 +11372,8 @@ export default function GlobalAttackMap() {
           }}>
             {(() => {
               if (selectedId) {
-                return <>Hover the dots radiating outward — each one is a related entity in the blast radius.</>;
+                // Touch screens have no hover: map-responsive.css shows "Tap" there.
+                return <><span className="map-hint-mouse">Hover</span><span className="map-hint-touch">Tap</span> the dots radiating outward — each one is a related entity in the blast radius.</>;
               }
               if (hoveredId) {
                 const inc = visibleIncidents.find(i => i._id === hoveredId);
@@ -11199,15 +11409,42 @@ export default function GlobalAttackMap() {
           same tier (derived from auth) without prop-drilling. */}
       {selectedIncident && deckReady && (
         <AccessContext.Provider value={accessTier}>
-          <IncidentCascade
+          {/* A broken card must not take the map down with it: the boundary
+              shows a small note with a Close button instead. Keyed by the
+              incident so the next one gets a fresh try. */}
+          <IncidentCardBoundary
             key={selectedIncident._id || selectedIncident.headline}
-            incident={selectedIncident}
-            reporter={selectedReporter}
-            viewMode={viewMode}
-            autoPlay={mobilePreview}
-            onSkip={() => { setMobilePreview(false); setSelectedId(null); }}
-            onClose={() => { setMobilePreview(false); setSelectedId(null); }}
-          />
+            fallback={(
+              <div role="alert" style={{
+                position: "fixed", top: 120, right: 16, zIndex: 99,
+                width: "min(320px, calc(100vw - 32px))", padding: "14px 16px",
+                background: "rgba(20,20,22,0.96)", backdropFilter: "blur(16px)",
+                border: "1px solid rgba(255,107,107,0.35)", borderRadius: 0,
+                boxShadow: "0 12px 34px rgba(0,0,0,0.5)", fontFamily: "Inter, sans-serif",
+                display: "flex", alignItems: "center", gap: 12,
+              }}>
+                <span style={{ flex: 1, minWidth: 0, fontSize: 12, lineHeight: 1.5, color: "rgba(255,255,255,0.8)" }}>
+                  This incident card could not be displayed.
+                </span>
+                <button onClick={() => { setMobilePreview(false); setSelectedId(null); }} style={{
+                  minHeight: 36, padding: "0 14px", flexShrink: 0, cursor: "pointer",
+                  background: "rgba(252,189,0,0.12)", border: `1px solid ${BRAND.borderGold}`, borderRadius: 0,
+                  color: BRAND.gold, fontFamily: "Inter, sans-serif", fontSize: 11, fontWeight: 700,
+                  letterSpacing: "0.08em", textTransform: "uppercase",
+                }}>Close</button>
+              </div>
+            )}
+          >
+            <IncidentCascade
+              key={selectedIncident._id || selectedIncident.headline}
+              incident={selectedIncident}
+              reporter={selectedReporter}
+              viewMode={viewMode}
+              autoPlay={mobilePreview}
+              onSkip={() => { setMobilePreview(false); setSelectedId(null); }}
+              onClose={() => { setMobilePreview(false); setSelectedId(null); }}
+            />
+          </IncidentCardBoundary>
         </AccessContext.Provider>
       )}
 

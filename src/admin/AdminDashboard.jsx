@@ -16,7 +16,10 @@ import { AdminStats } from "./AdminStats";
 import { AdminFeedback } from "./AdminFeedback";
 import { AdminBriefings } from "./AdminBriefings";
 import { AdminReports } from "./AdminReports";
+import { AdminBroadcasts } from "./AdminBroadcasts";
 import { Logo } from "../auth/Logo";
+import { useAuth } from "../auth/AuthProvider";
+import { WORKOS } from "../lib/workos";
 import "./admin-responsive.css";
 
 const BRAND = {
@@ -81,12 +84,21 @@ function TabIcon({ name, size = 15 }) {
         <line x1="8" y1="17" x2="13" y2="17" />
       </svg>
     );
+    case "broadcasts": return (
+      <svg {...common}>
+        <rect x="9" y="3" width="6" height="11" rx="3" />
+        <path d="M5 11a7 7 0 0 0 14 0" />
+        <line x1="12" y1="18" x2="12" y2="21" />
+        <line x1="9" y1="21" x2="15" y2="21" />
+      </svg>
+    );
     default: return null;
   }
 }
 
 const TABS = [
   { id: "reports",   label: "Reports",   icon: "reports",   body: AdminReports },
+  { id: "broadcasts", label: "Podcasts", icon: "broadcasts", body: AdminBroadcasts },
   { id: "inbox",     label: "Inbox",     icon: "inbox",     body: AdminInbox },
   { id: "briefings", label: "Briefings", icon: "briefings", body: AdminBriefings },
   { id: "users",     label: "Users",     icon: "users",     body: AdminUsers },
@@ -107,6 +119,10 @@ function FontLoader() {
 }
 
 export function AdminDashboard() {
+  const { user } = useAuth();
+  // Set by the sign-in bridge: two-step verification is on, or the last
+  // sign-in used a passkey. A reminder only — not an access check.
+  const protectedAdmin = !!user?.app_metadata?.mfa_factor_id || user?.app_metadata?.auth_method === "Passkey";
   const [active, setActive] = useState(() => {
     try { return new URLSearchParams(window.location.search).get("tab") || "reports"; } catch { return "reports"; }
   });
@@ -146,7 +162,7 @@ export function AdminDashboard() {
           </span>
         </div>
         <div style={{ display: "flex", gap: 14, alignItems: "center" }}>
-          <a href="/" className="adm-head-back" style={{
+          <a href="/?map" className="adm-head-back" style={{
             fontFamily: "Inter, sans-serif", fontSize: 11, fontWeight: 600,
             color: BRAND.textSecondary, letterSpacing: "0.10em",
             textTransform: "uppercase", textDecoration: "none",
@@ -157,6 +173,14 @@ export function AdminDashboard() {
           </a>
         </div>
       </header>
+
+      {WORKOS && !protectedAdmin && (
+        <div role="note" className="r-pad" style={{ padding: "10px 32px", background: "rgba(252,189,0,0.12)", borderBottom: `1px solid ${BRAND.borderGold}`, color: BRAND.white, fontSize: 13, lineHeight: 1.5 }}>
+          <strong style={{ color: BRAND.gold }}>Protect the admin console.</strong>{" "}
+          Turn on two-step verification in{" "}
+          <a href="/?profile#security" style={{ color: BRAND.gold, fontWeight: 700 }}>Profile → Security</a>, or sign in with a passkey. The admin console will soon require it.
+        </div>
+      )}
 
       {/* TAB BAR */}
       <nav className="r-pad r-scrollx adm-tabs" style={{

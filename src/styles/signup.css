@@ -1,0 +1,115 @@
+/* signup.css — the sign-up page (src/auth/SignUpPage.jsx, /?signup).
+   It matches the WorkOS-hosted sign-in page it sits next to: two columns, the
+   same dark left panel (copied from the AuthKit branding, authkit-panel/
+   panel.css + signup.html, classes .ap-*), a white right side with the form
+   in a bordered card. WorkOS's settings: Inter, button #FCBD00 on #0E1116,
+   links #8A6D00, small radius. The panel is hidden on phones, as on WorkOS. */
+
+.su{min-height:100vh;min-height:100dvh;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);background:#FFFFFF;color:#0E1116;font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.su *,.su *:before,.su *:after{box-sizing:border-box}
+.su-panel{position:sticky;top:0;height:100vh;height:100dvh}
+.su-main{display:flex;flex-direction:column;align-items:center;min-width:0;padding:36px 24px 24px}
+.su-brand{display:none}
+.su-icon{display:block;width:30px;height:30px;margin:12px auto 16px}
+.su-icon img{display:block;width:30px;height:30px}
+.su-h1{margin:0 0 20px;font-size:24px;line-height:1.25;font-weight:700;letter-spacing:-.015em;text-align:center}
+.su-card{width:100%;max-width:440px;padding:30px 40px 24px;border:1px solid #E4E4E7;border-radius:8px;background:#FFFFFF}
+.su-row{display:flex;gap:14px}
+.su-row>.su-field{flex:1 1 0;min-width:0}
+.su-field{margin-bottom:14px}
+.su-label{display:block;margin-bottom:6px;font-size:14px;font-weight:500;color:#0E1116}
+.su-opt{font-weight:400;color:#71717A}
+.su-input,.su-select{display:block;width:100%;height:40px;padding:0 12px;border:1px solid #D4D4D8;border-radius:4px;background:#FFFFFF;color:#0E1116;font:inherit;font-size:15px;line-height:38px;transition:border-color .12s,box-shadow .12s}
+.su-select{appearance:none;-webkit-appearance:none;padding-right:34px;cursor:pointer;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M2.5 4.5 6 8l3.5-3.5' fill='none' stroke='%2371717A' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 12px center;text-overflow:ellipsis}
+.su-select.su-empty{color:#71717A}
+.su-select option,.su-select optgroup{color:#0E1116}
+.su-input::placeholder{color:#A1A1AA}
+.su-input:focus,.su-select:focus{outline:none;border-color:#FCBD00;box-shadow:0 0 0 1px #FCBD00}
+/* keyboard focus: a dark outer ring too (yellow alone is too faint on white) */
+.su-input:focus-visible,.su-select:focus-visible{box-shadow:0 0 0 1px #FCBD00,0 0 0 3px #0E1116}
+.su-input[aria-invalid="true"],.su-select[aria-invalid="true"]{border-color:#B21F31}
+.su-input[aria-invalid="true"]:focus,.su-select[aria-invalid="true"]:focus{box-shadow:0 0 0 1px #B21F31}
+.su-input[aria-invalid="true"]:focus-visible,.su-select[aria-invalid="true"]:focus-visible{box-shadow:0 0 0 1px #B21F31,0 0 0 3px #0E1116}
+.su-code{height:52px;font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:24px;letter-spacing:.4em;text-align:center;padding-left:calc(12px + .4em)}
+.su-check{display:flex;gap:10px;align-items:flex-start;margin:2px 0 16px;font-size:13px;line-height:1.5;color:#3F3F46;cursor:pointer}
+.su-check input{flex:none;width:16px;height:16px;margin:2px 0 0;accent-color:#FCBD00}
+.su-btn{display:flex;align-items:center;justify-content:center;width:100%;height:40px;border:0;border-radius:4px;background:#FCBD00;color:#0E1116;font:inherit;font-size:15px;font-weight:500;cursor:pointer;transition:background .12s}
+.su-btn:hover{background:#EAB000}
+.su-btn:focus-visible,.su-oauth:focus-visible,.su-link:focus-visible{outline:2px solid #0E1116;outline-offset:2px}
+.su-btn[disabled]{background:#FDE08A;cursor:not-allowed}
+.su-or{display:flex;align-items:center;gap:14px;margin:18px 0;color:#71717A;font-size:12px;letter-spacing:.04em}
+.su-or:before,.su-or:after{content:"";flex:1;height:1px;background:#E4E4E7}
+.su-oauth{display:flex;align-items:center;justify-content:center;gap:10px;width:100%;height:40px;margin-bottom:10px;border:1px solid #D4D4D8;border-radius:4px;background:#FFFFFF;color:#0E1116;font:inherit;font-size:15px;font-weight:500;cursor:pointer;transition:background .12s}
+.su-oauth:hover{background:#FAFAFA}
+.su-oauth[disabled]{cursor:wait;opacity:.6}
+.su-oauth svg{flex:none}
+.su-hint{margin:-2px 0 10px;font-size:12px;line-height:1.5;color:#71717A;text-align:center}
+.su-alt{margin:14px 0 0;font-size:14px;color:#52525B;text-align:center}
+.su-link{padding:6px 2px;margin:-6px -2px;border:0;background:none;color:#8A6D00;font:inherit;font-weight:500;cursor:pointer;text-decoration:none}
+.su-link:hover{text-decoration:underline}
+.su-link[disabled]{color:#A1A1AA;cursor:default;text-decoration:none}
+.su-error{margin:0 0 14px;padding:10px 12px;border-left:3px solid #B21F31;background:#FDF2F3;color:#8F1827;font-size:13px;line-height:1.5}
+.su-note{margin:0 0 14px;padding:10px 12px;border-left:3px solid #FCBD00;background:#FFFBEB;color:#3F3F46;font-size:13px;line-height:1.5}
+.su-lead{margin:0 0 18px;font-size:14px;line-height:1.6;color:#3F3F46}
+.su-lead b{color:#0E1116;overflow-wrap:anywhere}
+.su-small{margin:14px 0 0;font-size:13px;line-height:1.6;color:#71717A;text-align:center}
+.su-actions{display:flex;flex-wrap:wrap;justify-content:space-between;gap:8px 16px;margin-top:16px;font-size:13px}
+.su-legal{margin-top:auto;padding-top:36px;max-width:440px;font-size:13px;line-height:1.6;color:#71717A;text-align:center}
+.su-legal a,.su-agree a{color:#52525B;text-decoration:underline;text-underline-offset:2px}
+.su-legal a:hover,.su-agree a:hover{color:#0E1116}
+/* the form step: the agreement inside the card, where it is seen before Continue */
+.su-agree{margin:14px 0 0;padding-top:12px;border-top:1px solid #F0F0F2;font-size:12.5px;line-height:1.6;color:#71717A;text-align:center}
+.su-sr{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
+
+/* phones and narrow windows: no panel, the brand on top (WorkOS hides its panel too) */
+@media (max-width:900px){
+  .su{grid-template-columns:minmax(0,1fr)}
+  .su-panel{display:none}
+  .su-main{padding:20px 16px 24px}
+  .su-brand{display:flex;align-items:center;gap:8px;align-self:flex-start;color:#0E1116;text-decoration:none;font-weight:600;font-size:17px;letter-spacing:-.02em}
+  .su-brand img{width:24px;height:24px}
+  .su-brand span span{color:#8A6D00}
+  .su-icon{display:none}
+  .su-h1{margin:28px 0 18px;font-size:22px}
+  .su-input,.su-select{font-size:16px}   /* under 16px, phones zoom into the field */
+  .su-code{font-size:24px}
+}
+@media (max-width:480px){
+  .su-card{padding:24px 18px 22px;border-radius:6px}
+  .su-row{flex-direction:column;gap:0}
+}
+
+/* ── the left panel: authkit-panel/panel.css, as on the WorkOS page ── */
+.ap{box-sizing:border-box;position:relative;height:100%;display:flex;flex-direction:column;color:#FFFFFF;background:#0E1116;overflow:hidden}
+.ap *{box-sizing:border-box}
+.ap:before{content:"";position:absolute;inset:0;background:url("https://images.unsplash.com/photo-1550751827-4bd374c3f58b?w=1400&q=70&auto=format&fit=crop") center/cover no-repeat;filter:saturate(.55) brightness(.8)}
+.ap:after{content:"";position:absolute;inset:0;background:radial-gradient(circle at 50% 42%,rgba(14,17,22,.35) 0,rgba(14,17,22,.7) 45%,rgba(14,17,22,.85) 70%),linear-gradient(180deg,rgba(14,17,22,.6) 0%,rgba(14,17,22,0) 30%,rgba(14,17,22,.85) 68%,#0E1116 100%)}
+.ap>*{position:relative;z-index:1}
+.ap-top{display:flex;align-items:center;gap:10px;padding:40px 56px 0}
+.ap-logo{width:28px;height:28px;display:block}
+.ap-mark{font-weight:600;font-size:20px;letter-spacing:-.02em;color:#FFFFFF}
+.ap-mark span{color:#FCBD00}
+.ap-art{flex:1;position:relative;min-height:260px}
+.ap-rings{position:absolute;left:50%;top:50%;width:440px;height:440px;margin:-220px 0 0 -220px}
+.ap-ring{position:absolute;left:50%;top:50%;border-radius:50%;border:1px solid rgba(252,189,0,.4);transform:translate(-50%,-50%)}
+.ap-r1{width:150px;height:150px;border-color:rgba(252,189,0,.7)}
+.ap-r2{width:290px;height:290px;border-style:dashed;border-color:rgba(252,189,0,.5)}
+.ap-r3{width:430px;height:430px;border-color:rgba(252,189,0,.25)}
+.ap-wave{position:absolute;left:50%;top:50%;width:40px;height:40px;border-radius:50%;border:2px solid #FCBD00;transform:translate(-50%,-50%);animation:apw 3.6s ease-out infinite}
+.ap-wave.w2{animation-delay:1.2s}
+.ap-wave.w3{animation-delay:2.4s}
+@keyframes apw{0%{width:40px;height:40px;opacity:.9}100%{width:440px;height:440px;opacity:0}}
+.ap-core{position:absolute;left:50%;top:50%;width:22px;height:22px;border-radius:50%;background:#FCBD00;transform:translate(-50%,-50%);box-shadow:0 0 34px rgba(252,189,0,.8)}
+.ap-node{position:absolute;width:12px;height:12px;border-radius:50%;background:#0E1116;border:2px solid #FCBD00;transform:translate(-50%,-50%)}
+.ap-tag{position:absolute;transform:translate(-50%,0);margin-top:12px;white-space:nowrap;font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:10px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:#E2E3E6;background:rgba(14,17,22,.85);padding:2px 6px}
+.ap-tag.c{color:#FCBD00}
+.ap-body{padding:0 56px 52px}
+.ap-rule{width:48px;height:3px;background:#FCBD00;margin-bottom:20px}
+.ap-title{margin:0;font-weight:700;font-size:44px;line-height:1.06;letter-spacing:-.03em;color:#FFFFFF}
+.ap-title span{color:#FCBD00}
+.ap-copy{margin:18px 0 0;max-width:470px;font-size:16px;line-height:1.6;color:#C9CBD0}
+.ap-for{margin:24px 0 0;font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11px;font-weight:600;letter-spacing:.16em;text-transform:uppercase;color:#8D9097}
+@media (max-height:860px){.ap-rings{transform:scale(.8)}.ap-title{font-size:38px}.ap-copy{font-size:15px}.ap-body{padding-bottom:40px}}
+@media (max-height:720px){.ap-rings{transform:scale(.62)}.ap-for{display:none}.ap-top{padding-top:28px}}
+@media (max-width:1100px){.ap-top,.ap-body{padding-left:40px;padding-right:40px}.ap-rings{transform:scale(.75)}.ap-title{font-size:36px}}
+@media (prefers-reduced-motion:reduce){.ap-wave{animation:none;opacity:0}}

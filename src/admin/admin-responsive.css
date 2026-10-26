@@ -37,10 +37,14 @@
   .adm-rep-2col { grid-template-columns: minmax(0, 1fr) !important; }
 }
 
-/* Users table: 816px of fixed tracks. From 701 to 881px the tracks tighten so
-   the whole row (Change tier included) fits with no scroller; the selector
-   (0,2,0) outranks responsive.css `.r-tablewrap > div { min-width: 720px }`. */
-@media (max-width: 881px) {
+/* Users table: the inline tracks plus gaps and row padding need an 834px row,
+   which a viewport only has from 900px (32px page padding and the card border
+   each side), or from 917px in a desktop window with a classic 17px scrollbar
+   (media queries count the scrollbar). Up to 916px the tracks tighten so the
+   whole row (Change tier included, with its 18px right padding) fits with no
+   scroller; the selector (0,2,0) outranks responsive.css
+   `.r-tablewrap > div { min-width: 720px }`. */
+@media (max-width: 916px) {
   .r-tablewrap > .adm-uhead,
   .r-tablewrap > .adm-urow {
     min-width: 0 !important;
@@ -49,19 +53,23 @@
   }
 }
 /* At 700px and below each user is a 3-row card: email + last seen; company /
-   role with the tier badge; joined date with the Change-tier select. */
+   role with the tier badge; joined date with the Change-tier select.
+   Three tracks so the badge and the 128px select do not share one: the last
+   track is only as wide as the badge, the select also spans the middle one
+   (which takes whatever else the select needs), and company / role spans the
+   first two, so it gets everything but the badge. */
 @media (max-width: 700px) {
   .r-tablewrap > .adm-uhead { display: none !important; }
   .r-tablewrap > .adm-urow {
-    grid-template-columns: minmax(0, 1fr) 128px !important;
-    grid-template-areas: "user user" "co badge" "joined pick" !important;
+    grid-template-columns: minmax(0, 1fr) auto auto !important;
+    grid-template-areas: "user user user" "co co badge" "joined pick pick" !important;
     row-gap: 8px !important;
   }
   .adm-urow > :nth-child(1) { grid-area: user; }
   .adm-urow > :nth-child(2) { grid-area: badge; justify-self: end; }
   .adm-urow > :nth-child(3) { grid-area: co; }
   .adm-urow > :nth-child(4) { grid-area: joined; }
-  .adm-urow > :nth-child(5) { grid-area: pick; }
+  .adm-urow > :nth-child(5) { grid-area: pick; min-width: 128px; }
 }
 
 /* Stats severity distribution: five columns need about 303px; the card has
@@ -73,10 +81,29 @@
 @media (min-width: 541px) and (max-width: 1073px) {
   .adm-tiles6 { grid-template-columns: repeat(3, minmax(0, 1fr)) !important; }
 }
+/* Stats 4-tile rows (Today's pulse, users by tier; min 140px): with 20px page
+   padding they go 3 + 1 from 480 to 635px. 2 + 2 there. */
+@media (min-width: 480px) and (max-width: 635px) {
+  .adm-tiles4 { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+}
+/* Stats 3-tile row (min 180px): 2 + 1 from 410 to 599px. Three across from
+   480px (tiles of 140px and up), one column below that, as on smaller phones. */
+@media (min-width: 480px) and (max-width: 599px) {
+  .adm-tiles3 { grid-template-columns: repeat(3, minmax(0, 1fr)) !important; }
+}
+@media (min-width: 410px) and (max-width: 479px) {
+  .adm-tiles3 { grid-template-columns: minmax(0, 1fr) !important; }
+}
+/* Inbox count strip (4 tiles, min 120px): 3 + 1 from 420 to 549px. 2 + 2 there. */
+@media (min-width: 420px) and (max-width: 549px) {
+  .adm-itiles { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+}
 
 /* Inbox application cards: the "·" separators sit between flex items that wrap
-   onto their own lines on phones, where they end up stranded; the 12px gap
-   already separates the items. */
-@media (max-width: 480px) {
+   onto their own lines on phones and tablets (seen up to 851px), where they
+   end up stranded at a line end; the 12px gap already separates the items.
+   899px leaves room for longer real names (and covers windows with a classic
+   scrollbar); from 900px all of them show, as before. */
+@media (max-width: 899px) {
   .adm-sep { display: none !important; }
 }

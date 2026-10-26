@@ -3,7 +3,9 @@
 //
 // Readers see PUBLISHED reports only, through:
 //   • view  hub_reports_public   — list columns, no html (anon-readable)
-//   • rpc   report_html(p_ref)   — the full standalone HTML for one report
+//   • rpc   report_html(p_ref)   — the standalone HTML for one report: the
+//                                   full one for a subscriber, the preview
+//                                   (header + Executive Summary) for anyone else
 // Admins author through the admin_* functions (all gated by _is_admin()).
 //
 // A report either belongs to a DB incident (incident_id set → the incident's
@@ -13,6 +15,7 @@
 import { supabase } from "./supabaseClient";
 import { GCP } from "./backend";
 import { uploadMedia } from "./gcpAuth";
+import { isPreviewHtml, reportShell } from "./reportPreview";
 
 const LIST_COLS = "id,ref,title,subtitle,summary,industry,primary_category,severity,incident_id,hero_image_url,author,tags,published_at,updated_at";
 
@@ -40,6 +43,27 @@ export async function fetchReportHtml(ref) {
   const { data, error } = await supabase.rpc("report_html", { p_ref: ref });
   if (error) return null;
   return typeof data === "string" && data.length ? data : null;
+}
+
+// The full baked report for a subscriber. /reports-full/<ref>.html sits
+// behind the server gate (middleware.js on Vercel, the Vite plugin locally),
+// which checks the reader's access token against the database; everyone else
+// reads the preview at /reports/<ref>.html. null when there is no session, the
+// reader is not a subscriber, or the file is missing — the caller then shows
+// the preview. getSession() refreshes an expired token first.
+export async function fetchFullReport(ref) {
+  if (!ref) return null;
+  try {
+    const { data } = await supabase.auth.getSession();
+    const token = data?.session?.access_token;
+    if (!token) return null;
+    const r = await fetch(`/reports-full/${encodeURIComponent(ref)}.html`, { headers: { Authorization: `Bearer ${token}` }, cache: "no-store" });
+    if (!r.ok || r.redirected) return null;
+    const html = await r.text();
+    // A real report shell only — never the app's own index page (the dev
+    // server answers unknown paths with it) or a preview.
+    return reportShell(html) && !isPreviewHtml(html) ? html : null;
+  } catch { return null; }
 }
 
 // ── Admin ──────────────────────────────────────────────────────────────────

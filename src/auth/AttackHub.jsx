@@ -15,9 +15,11 @@
 import React, { useEffect, useState, useRef } from "react";
 import { supabase } from "../lib/supabaseClient";
 import { isSubscriber } from "../lib/taxonomy";
-import { prepareReportFrame } from "../lib/reportLock";
+import { applyBroadcastToFrame, prepareReportFrame, readerLicence } from "../lib/reportLock";
 import { reportHtml } from "../lib/api";
-import { fetchReportHtml, listPublishedReports } from "../lib/reports";
+import { fetchFullReport, fetchReportHtml, listPublishedReports } from "../lib/reports";
+import { formatDuration, frameBroadcast, isAudioFile } from "../lib/broadcasts";
+import { useReportBroadcast } from "../lib/useReportBroadcast";
 import { useAuth } from "./AuthProvider";
 import { AuthModal } from "./AuthModal";
 import { SiteNav } from "./SiteNav";
@@ -260,6 +262,19 @@ const HUB_CSS = `
    minus the nav (64px on windows over 500px tall), hence 564px here. */
 @media (orientation:landscape) and (max-height:564px){.hubft .rf-back{top:7px}}
 .hubft .rframe{width:100%;border:none;display:block;height:calc(100vh - var(--nav-h,64px));height:calc(100dvh - var(--nav-h,64px))}
+/* Related podcast: the episode bar docked at the foot of an open report (src/lib/broadcasts.js). */
+.hubft .rf-bc{position:absolute;left:0;right:0;bottom:0;z-index:21;display:flex;align-items:center;gap:14px;padding:10px 24px;background:rgba(14,17,22,.96);color:#fff;border-top:1px solid #FCBD00;backdrop-filter:blur(6px);font-family:Inter,sans-serif}
+.hubft .rf-bc .k{font:600 10px/1 "JetBrains Mono",ui-monospace,monospace;letter-spacing:.14em;text-transform:uppercase;color:#FCBD00;margin-bottom:4px}
+.hubft .rf-bc .t{font-size:13.5px;font-weight:600;line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.hubft .rf-bc .m{font-size:11px;color:#A6A8AD;margin-top:2px}
+.hubft .rf-bc .w{flex:1;min-width:0}
+.hubft .rf-bc audio{height:36px;width:min(380px,42vw)}
+.hubft .rf-bc a.go{flex:none;background:#FCBD00;color:#0f0f0f;text-decoration:none;border-radius:6px;padding:9px 13px;font:700 11px/1 Inter,sans-serif;letter-spacing:.08em;text-transform:uppercase}
+.hubft .rf-bc .soon{flex:none;font:600 10px/1 "JetBrains Mono",ui-monospace,monospace;letter-spacing:.12em;text-transform:uppercase;color:#0f0f0f;background:#EDEDED;padding:7px 10px;border-radius:4px}
+.hubft .rf-bc .x{flex:none;background:transparent;border:1px solid rgba(255,255,255,.3);color:#fff;border-radius:6px;width:30px;height:30px;cursor:pointer;font-size:14px;line-height:1}
+.hubft .rf-bc .ic{flex:none;width:34px;height:34px;border-radius:8px;background:#FCBD00;display:grid;place-items:center}
+.hubft .rf-bc .ic i{display:block;width:0;height:0;border-left:11px solid #0f0f0f;border-top:7px solid transparent;border-bottom:7px solid transparent;margin-left:3px}
+@media(max-width:640px){.hubft .rf-bc{flex-wrap:wrap;padding:10px 14px;gap:10px}.hubft .rf-bc audio{width:100%;order:9}.hubft .rf-bc .t{white-space:normal}}
 /* Landscape phones: a picture no taller than the screen under the nav.
    width:100% because the hero lead is a flex column, where auto side margins
    would otherwise shrink the frame to nothing. max-width:980px keeps short
@@ -502,42 +517,93 @@ function ArticleView({ article, onBack, onMap, user }) {
   );
 }
 
+// BroadcastBar — the related broadcast (podcast episode) for the open report,
+// docked at the foot of the frame, for report shells WITHOUT a broadcast card
+// of their own (the v4 files; the v5 shell plays the episode in its own card,
+// fed through reportLock.applyBroadcastToFrame). Nothing is shown when the
+// report has no episode; an episode without an audio file is announced as
+// coming soon; a file plays in place; an episode page (Spotify, YouTube)
+// opens in a new tab. Readers can dismiss it for this report.
+function BroadcastBar({ eps }) {
+  const [hidden, setHidden] = useState(false);
+  useEffect(() => { setHidden(false); }, [eps]);
+  const ep = eps && eps[0];
+  if (!ep || hidden) return null;
+  const link = ep.page_url || (ep.audio_url && !isAudioFile(ep.audio_url) ? ep.audio_url : null);
+  const file = ep.audio_url && isAudioFile(ep.audio_url) ? ep.audio_url : null;
+  const meta = [ep.series, ep.episode, formatDuration(ep.duration_sec), ep.published_at ? new Date(ep.published_at).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }) : null].filter(Boolean).join(" · ");
+  return (
+    <div className="rf-bc" role="region" aria-label="Related podcast">
+      <span className="ic" aria-hidden="true"><i /></span>
+      <div className="w">
+        <div className="k">Related podcast{eps.length > 1 ? ` · ${eps.length} episodes` : ""}</div>
+        <div className="t" title={ep.title}>{ep.title}</div>
+        <div className="m">{meta}{ep.show_notes ? ` — ${ep.show_notes}` : ""}</div>
+      </div>
+      {file ? <audio controls preload="none" src={file} /> : link ? <a className="go" href={link} target="_blank" rel="noopener">Listen ↗</a> : <span className="soon">Episode coming soon</span>}
+      <button type="button" className="x" aria-label="Hide the podcast bar" onClick={() => setHidden(true)}>×</button>
+    </div>
+  );
+}
+
 // ReportFrame — when a pre-baked full briefing exists for this incident
 // (public/reports/<id>.html), render that exact report inside the hub via an
 // iframe, with a slim back/CTA bar on top. Faithful to the baked design; no
 // re-rendering. Falls back to ArticleView when no report file exists.
-// Free readers get the report with the three subscriber sections locked
-// (src/lib/reportLock.js — the same gate the dashboard applies), so the public
-// Hub is not a way around the paywall.
-function ReportFrame({ article, onBack, onMap, user, subscriber }) {
+// Free readers get the PREVIEW — header, key figures and the Executive
+// Summary, Download PDF off (scripts/build-report-previews.mjs); the full
+// report reaches subscribers only, through the server gate. The public Hub is
+// not a way around the paywall.
+// Design review (localhost only — import.meta.env.DEV is false in the live
+// build): ?design=blur shows the blurred-sections preview from
+// public/reports-blur/ instead of the live one.
+const PREVIEW_DIR = (() => {
+  if (!import.meta.env.DEV) return "reports";
+  try { return new URLSearchParams(window.location.search).get("design") === "blur" ? "reports-blur" : "reports"; } catch { return "reports"; }
+})();
+
+function ReportFrame({ article, onBack, onMap, user, profile, subscriber, authReady }) {
   const ref = useRef(null);
   const reportRef = article.reportRef || article.id;
   // Where the HTML comes from, in order:
-  //   1. the reports CMS (public.hub_reports_public + report_html) — authored
-  //      in the admin console, published only;
+  //   1. the reports CMS (report_html) — authored in the admin console,
+  //      published only; the database hands a free reader the preview;
   //   2. the API, which applies the subscriber lock server-side;
-  //   3. the static file baked at public/reports/<ref>.html.
-  // 1 and 2 render through srcdoc, which keeps the frame same-origin so
-  // prepareReportFrame can still lock r-blast / r-ctrl / r-vend for free
-  // readers — the CMS renderer emits the same shell and section ids.
+  //   3. a subscriber: the full baked file from /reports-full/ (gated);
+  //   4. everyone else: the preview baked at public/reports/<ref>.html.
+  // 1-3 render through srcdoc, which keeps the frame same-origin so
+  // prepareReportFrame can still reach in (licence line, responsive layer).
+  // Nothing is fetched until the session has settled, so a subscriber never
+  // sees the preview flash first and a tier change re-fetches.
   const [doc, setDoc] = useState(undefined);
   useEffect(() => {
+    if (!authReady) return;
     let dead = false; setDoc(undefined);
     (async () => {
       let html = null;
       try { html = await fetchReportHtml(reportRef); } catch { /* not a CMS report */ }
       if (!html) { try { html = await reportHtml(reportRef); } catch { /* API off or refused */ } }
+      if (!html && subscriber) html = await fetchFullReport(reportRef);
       if (!dead) setDoc(html || null);
     })();
     return () => { dead = true; };
-  }, [reportRef]);
+  }, [reportRef, subscriber, authReady]);
+  // The broadcast: into the frame's own card when the shell has one (v5), else
+  // the bar under the frame. eps arrives on its own clock, so the effect also
+  // re-runs when it does (the frame is usually loaded by then).
+  const eps = useReportBroadcast(reportRef);
+  const [cardInFrame, setCardInFrame] = useState(false);
+  useEffect(() => { setCardInFrame(false); }, [reportRef]);
   useEffect(() => {
     const fr = ref.current; if (!fr) return;
-    const onLoad = () => { prepareReportFrame(fr, { subscriber, onSubscribe: () => { window.location.href = "/?subscribe"; }, readerName: user?.email || "" }); };
+    const onLoad = () => {
+      prepareReportFrame(fr, { subscriber, onSubscribe: () => { window.location.href = "/?subscribe"; }, readerName: user?.email || "", reportRef, reader: readerLicence(profile, user, subscriber) });
+      if (eps !== undefined) setCardInFrame(applyBroadcastToFrame(fr, frameBroadcast(eps)));
+    };
     fr.addEventListener("load", onLoad);
     if (fr.contentDocument?.readyState === "complete" && fr.contentDocument.body?.children.length) onLoad();
     return () => fr.removeEventListener("load", onLoad);
-  }, [article?.reportRef, subscriber, user?.email, doc]); // doc: the frame mounts only once the API answered
+  }, [article?.reportRef, subscriber, user?.email, profile, doc, eps]); // doc: the frame mounts only once the API answered
   return (
     <main style={{ background: "#FFFFFF", fontFamily: "Inter, sans-serif", position: "relative" }}>
       <button className="rf-back" onClick={onBack} style={{
@@ -550,10 +616,11 @@ function ReportFrame({ article, onBack, onMap, user, subscriber }) {
       }}><span>← Back<span className="rf-long"> to the feed</span></span></button>
       {doc === undefined ? null : <iframe
         ref={ref}
-        {...(doc ? { srcDoc: doc } : { src: `/reports/${encodeURIComponent(reportRef)}.html` })}
+        {...(doc ? { srcDoc: doc } : { src: `/${PREVIEW_DIR}/${encodeURIComponent(reportRef)}.html` })}
         title={article.headline || article.id}
         className="rframe"
       />}
+      {!cardInFrame && <BroadcastBar eps={eps} />}
     </main>
   );
 }
@@ -609,7 +676,7 @@ function shapeRow(r, reportByIncident = {}) {
 }
 
 export function AttackHub() {
-  const { user, tier } = useAuth();
+  const { user, tier, profile, loading: authLoading } = useAuth();
   const [authOpen, setAuthOpen] = useState(false);
   const [reportIds, setReportIds] = useState(null);  // Set of incident ids with a baked report
   const [articles, setArticles] = useState([]);
@@ -637,6 +704,10 @@ export function AttackHub() {
   // authored, newer one. Either source failing leaves the other working.
   const [reportByIncident, setReportByIncident] = useState({});
   const [cmsReports, setCmsReports] = useState([]);   // published rows, for the reports section
+  // Flagship baked reports pinned to the top of the Reports section
+  // (manifest.json "featured"), so a briefing is not lost deep in the feed
+  // once newer incidents push its incident card down.
+  const [featuredReports, setFeaturedReports] = useState([]);
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -646,6 +717,7 @@ export function AttackHub() {
         const m = r.ok ? await r.json() : null;
         if (Array.isArray(m)) baked = { refs: m, byIncident: {} };
         else if (m) baked = { refs: m.refs || Object.values(m.byIncident || {}), byIncident: m.byIncident || {} };
+        if (m && Array.isArray(m.featured) && !cancelled) setFeaturedReports(m.featured.filter((f) => f && f.ref && f.title));
       } catch { /* no manifest — the CMS alone still works */ }
       let rows = [];
       try { rows = await listPublishedReports({ limit: 1000 }); } catch { /* CMS unreachable — the baked files alone still work */ }
@@ -753,11 +825,14 @@ export function AttackHub() {
     let want = null;
     try { want = new URLSearchParams(window.location.search).get("report"); } catch { /* noop */ }
     if (!want) { didReportOpen.current = true; return; }
-    if (!cmsReports.length) return;                    // wait for the index
-    didReportOpen.current = true;
+    if (!cmsReports.length && !articles.length) return;   // wait for an index
     const row = cmsReports.find(r => r && r.ref === want);
-    if (row) { setSelected(reportArticle(row)); try { window.scrollTo({ top: 0, behavior: "instant" }); } catch { window.scrollTo(0, 0); } }
-  }, [cmsReports]);
+    const baked = row ? null : articles.find(x => x.reportRef === want);   // a baked briefing's ref (the PDF's QR code)
+    const target = row ? reportArticle(row) : baked;
+    if (!target && !(cmsReports.length && articles.length)) return;   // the other index may still name it
+    didReportOpen.current = true;
+    if (target) { setSelected(target); try { window.scrollTo({ top: 0, behavior: "instant" }); } catch { window.scrollTo(0, 0); } }
+  }, [cmsReports, articles]);
 
   const cats = ["ALL", ...Array.from(new Set(articles.map(a => a.primary_category).filter(Boolean)))];
   const inds = ["ALL", ...Array.from(new Set(articles.map(a => a.industry).filter(Boolean))).sort()];
@@ -800,7 +875,8 @@ export function AttackHub() {
   useEffect(() => { setPage(0); }, [catFilter, indFilter, dayFilter, dateFrom, dateTo]);
 
   function goToPage(p) { setPage(Math.max(0, Math.min(p, pageCount - 1))); try { window.scrollTo({ top: 0, behavior: "smooth" }); } catch { window.scrollTo(0, 0); } }
-  function openMap() { if (user) window.location.href = "/"; else setAuthOpen(true); }
+  // "/?map": the bare "/" is the dashboard for a signed-in reader.
+  function openMap() { if (user) window.location.href = "/?map"; else setAuthOpen(true); }
   function openArticle(a) { setSelected(a); try { window.scrollTo({ top: 0, behavior: "instant" }); } catch { window.scrollTo(0, 0); } }
 
   // ── card/rail builders (close over openArticle) ──
@@ -870,6 +946,32 @@ export function AttackHub() {
   // Standalone reports: analyst pieces that are not about one incident. The
   // hero is the report's own picture when it has one; NewsImage falls back to
   // a category image when it does not, so both shapes look deliberate.
+  // A pinned baked report → the article shape ReportFrame opens.
+  const featuredArticle = (f) => ({
+    id: f.incident ?? f.ref, _key: `feat-${f.ref}`, reportRef: f.ref,
+    headline: f.title, summary: f.subtitle || "", article_body: f.subtitle || "",
+    severity: f.severity, primary_category: f.category, primary_subcategory_name: null,
+    industry: f.industry || null, sector: f.industry || null, entity: null, country: null, location_name: null,
+    image_url: f.image || null, incident_day: f.day, event_date: f.day, sortDay: f.day,
+    confidence: null, status: null, reporter: null, data: null,
+  });
+  const FeaturedReportCard = (f) => {
+    const a = featuredArticle(f);
+    return (
+      <div key={`feat-${f.ref}`} className="opc" style={{ cursor: "pointer", padding: 0, overflow: "hidden", outline: `2px solid ${GOLD}`, outlineOffset: -2 }} onClick={() => openArticle(a)}>
+        <NewsImage a={a} />
+        <div style={{ padding: "16px 18px 18px" }}>
+          <div className="mrow" style={{ marginBottom: 8, gap: 8 }}>
+            <span style={{ background: GOLD, color: "#0F0F0F", fontSize: 9.5, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase", padding: "3px 7px" }}>{f.kicker || "Featured briefing"}</span>
+            <SevChip a={a} /><span className="by">{fmtShort(a.incident_day)}</span>
+          </div>
+          <h3 style={{ margin: "0 0 6px" }}>{f.title}</h3>
+          {f.subtitle && <p style={{ margin: 0 }}>{f.subtitle}</p>}
+          <div className="by" style={{ marginTop: 10 }}>{[f.industry, CAT_NAME[f.category] || f.category].filter(Boolean).join("  ·  ")}</div>
+        </div>
+      </div>
+    );
+  };
   const ReportCard = (r) => {
     const a = reportArticle(r);
     return (
@@ -910,7 +1012,7 @@ export function AttackHub() {
         // Resolve the ref at render time: the manifest can arrive after the
         // incident rows did, so the row's own reportRef may still be null.
         (() => { const ref = selected.reportRef || reportByIncident[String(selected.id)] || null; return reportIds && ref && reportIds.has(ref); })()
-          ? <ReportFrame article={{ ...selected, reportRef: selected.reportRef || reportByIncident[String(selected.id)] }} onBack={() => setSelected(null)} onMap={openMap} user={user} subscriber={isSubscriber(tier)} />
+          ? <ReportFrame article={{ ...selected, reportRef: selected.reportRef || reportByIncident[String(selected.id)] }} onBack={() => setSelected(null)} onMap={openMap} user={user} profile={profile} subscriber={isSubscriber(tier)} authReady={!authLoading} />
           : <ArticleView article={selected} onBack={() => setSelected(null)} onMap={openMap} user={user} />
       ) : (
         <>
@@ -1083,6 +1185,28 @@ export function AttackHub() {
                       );
                     })()}
 
+                    {featuredReports.slice(0, 1).map((f) => {
+                      const a = featuredArticle(f);
+                      return (
+                        <section key={`featband-${f.ref}`} className="sec" aria-label="Featured briefing">
+                          <div onClick={() => openArticle(a)} role="button" tabIndex={0}
+                            onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openArticle(a); } }}
+                            style={{ display: "flex", flexWrap: "wrap", alignItems: "stretch", cursor: "pointer", background: "#0F0F11", color: "#fff", border: `1px solid ${GOLD}`, overflow: "hidden" }}>
+                            <div style={{ flex: "1 1 320px", minHeight: 200, background: `#1a1a1d url("${f.image || ""}") center/cover no-repeat` }} />
+                            <div style={{ flex: "1.4 1 380px", padding: "26px 28px", display: "flex", flexDirection: "column", justifyContent: "center", gap: 10 }}>
+                              <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                                <span style={{ background: GOLD, color: "#0F0F0F", fontSize: 10, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase", padding: "4px 8px" }}>{f.kicker || "Featured briefing"}</span>
+                                <span style={{ fontSize: 11, color: "#A8A8A8", letterSpacing: "0.06em", textTransform: "uppercase" }}>{[f.industry, fmtShort(f.day)].filter(Boolean).join("  ·  ")}</span>
+                              </div>
+                              <h2 style={{ margin: 0, fontSize: 28, lineHeight: 1.15, letterSpacing: "-0.02em", color: "#fff" }}>{f.title}</h2>
+                              {f.subtitle && <p style={{ margin: 0, fontSize: 15, lineHeight: 1.55, color: "#C9C9CF", maxWidth: "62ch" }}>{f.subtitle}</p>}
+                              <span style={{ marginTop: 6, alignSelf: "flex-start", background: GOLD, color: "#0F0F0F", fontSize: 12, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", padding: "11px 18px" }}>Read the briefing →</span>
+                            </div>
+                          </div>
+                        </section>
+                      );
+                    })}
+
                     {top.length > 0 && (
                       <section className="sec"><SecHead>Top Stories</SecHead><div className="g4">{top.map(Story)}</div></section>
                     )}
@@ -1128,11 +1252,11 @@ export function AttackHub() {
                       );
                     })}
 
-                    {standaloneReports.length > 0 && (
+                    {(featuredReports.length > 0 || standaloneReports.length > 0) && (
                       <section className="reports sec" style={{ marginTop: 48, padding: "42px 0" }}>
                         <div className="wrap">
                           <div className="sh l"><span className="sq" style={{ background: GOLD }} /><h2>Reports</h2></div>
-                          <div className="an3">{standaloneReports.map(ReportCard)}</div>
+                          <div className="an3">{featuredReports.map(FeaturedReportCard)}{standaloneReports.slice(0, Math.max(0, 6 - featuredReports.length)).map(ReportCard)}</div>
                         </div>
                       </section>
                     )}

@@ -13,8 +13,10 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../lib/supabaseClient";
 import { adminDeleteReport, adminGetReport, adminListReports, adminSetReportStatus, adminUpsertReport, makeReportRef, uploadReportHero } from "../lib/reports";
 import { DEFAULT_BRAND, REPORT_FONTS, REPORT_SECTIONS, applyBrandToHtml, renderReport, reportMetaFromHtml } from "../lib/reportTemplate";
+import { makeReportPreview, stubPreview } from "../lib/reportPreview";
 import { CATEGORIES, INDUSTRIES } from "../lib/taxonomy";
 import { ReportPageEditor } from "./ReportPageEditor";
+import { AdminBroadcasts } from "./AdminBroadcasts";
 
 const BRAND = { gold: "#FCBD00", obsidian: "#1A1A1A", card: "#242424", deep: "#080808", white: "#FFFFFF", muted: "#A8A8A8", dim: "#585858", border: "#333333" };
 const SEVS = [[5, "Critical"], [4, "High"], [3, "Medium"], [2, "Low"], [1, "Minimal"]];
@@ -114,13 +116,21 @@ export function AdminReports() {
   function payload() {
     const ref = data.ref.trim() || makeReportRef(data.title);
     const html = data.mode === "html" ? applyBrandToHtml(data.uploadedHtml, brand) : renderReport({ ...data, ref }, brand);
+    // The free-reader copy (header + Executive Summary), saved next to the full
+    // HTML: report_html hands it to anyone who is not a subscriber. An upload
+    // in a shell the cutter does not know gets the title-only stub.
+    let html_preview;
+    if (data.mode === "html") {
+      try { html_preview = makeReportPreview(html).html; }
+      catch { html_preview = stubPreview({ ref, title: data.title, subtitle: data.subtitle, summary: data.dek }); }
+    } else html_preview = renderReport({ ...data, ref }, brand, { preview: true });
     return {
       ...(editing?.id ? { id: editing.id } : {}),
       ref, title: data.title.trim() || "Untitled report", subtitle: data.subtitle || null, summary: (data.sections.summary || "").slice(0, 600) || data.dek || null,
       industry: data.industry || null, primary_category: data.category || null, severity: Number(data.severity) || null,
       incident_id: data.incidentId ? Number(data.incidentId) : null, hero_image_url: data.heroImageUrl || null, author: data.author || null,
       tags: data.tags.split(",").map((t) => t.trim()).filter(Boolean),
-      data: { ...data, ref, uploadedHtml: undefined }, brand, html,
+      data: { ...data, ref, uploadedHtml: undefined }, brand, html, html_preview,
     };
   }
   async function save(publish = null) {
@@ -197,7 +207,8 @@ export function AdminReports() {
       {err && <div style={{ background: "#3a1a1a", border: "1px solid #FF3B30", padding: "10px 14px", borderRadius: 4, marginBottom: 14, fontSize: 13 }}>{err}</div>}
 
       <div className="adm-rep-grid" style={{ display: "grid", gridTemplateColumns: editing ? "300px 1fr" : "1fr", gap: 18, alignItems: "start" }}>
-        {/* LIST */}
+        {/* LIST, with the broadcasts (podcast episodes) under it */}
+        <div>
         <div style={{ background: BRAND.obsidian, border: `1px solid ${BRAND.border}`, borderRadius: 8, overflow: "hidden" }}>
           {loading ? <div style={{ padding: 40, textAlign: "center", color: BRAND.dim }}>Loading…</div>
             : list.length === 0 ? <div style={{ padding: 40, textAlign: "center", color: BRAND.dim }}>No reports yet. Create the first one.</div>
@@ -211,6 +222,8 @@ export function AdminReports() {
                 <div style={{ fontSize: 11, color: BRAND.muted, marginTop: 4 }}>{[r.industry, r.primary_category, r.severity ? `S${r.severity}` : null, r.incident_id ? `incident #${r.incident_id}` : "standalone"].filter(Boolean).join(" · ")}</div>
               </div>
             ))}
+        </div>
+        <AdminBroadcasts reportRef={editing ? data.ref : ""} compact reports={list} />
         </div>
 
         {/* EDITOR */}

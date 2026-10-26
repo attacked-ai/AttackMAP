@@ -23,9 +23,11 @@ import { SiteNav } from "../auth/SiteNav";
 import { CATEGORY_NAME, INDUSTRIES, ROLES, SECTORS, SEVERITY, isSubscriber, tierLabel } from "../lib/taxonomy";
 import { loadCounts, loadIncidentDetail, loadIndustry, loadIndustryExtras, loadReportIndex, reportRefFor } from "./data";
 import { incidentImage, incidentPhoto, industryPhoto } from "../lib/images";
-import { prepareReportFrame } from "../lib/reportLock";
+import { applyBroadcastToFrame, readerLicence, prepareReportFrame } from "../lib/reportLock";
+import { frameBroadcast } from "../lib/broadcasts";
+import { useReportBroadcast } from "../lib/useReportBroadcast";
 import { reportHtml } from "../lib/api";
-import { fetchReportHtml } from "../lib/reports";
+import { fetchFullReport, fetchReportHtml } from "../lib/reports";
 import "./dashboard.css";
 
 const DEFAULT_INDUSTRY = "Automotive & EV";
@@ -248,32 +250,44 @@ function YourIndustry({ P, name, subscriber, query, onOpen, onSubscribe, go }) {
 
 // "Your plan" — the one place a signed-in reader sees their tier and switches
 // it. The nav's "Manage subscription" lands here (?subscriptions → alerts).
-function ReportFrame({ i, reportRef, subscriber, onSubscribe, readerName }) {
+function ReportFrame({ i, reportRef, subscriber, onSubscribe, readerName, reader }) {
   const ref = useRef(null);
+  const { loading: authLoading } = useAuth();   // decide only once the tier is known
   // The report scrolls inside its own .reader wrapper (body overflow hidden),
   // so the frame fills the viewport below the bar and the report scrolls
   // within it — the same framing the ?hub page uses.
   const [h, setH] = useState(800);
   // With the API on, the report arrives with the lock already applied by the
   // server and is shown through srcdoc (same-origin, so the frame can still be
-  // reached). Off, or unreachable: the static file plus the client-side lock.
+  // reached). Off, or unreachable: a subscriber gets the full baked file from
+  // the gated /reports-full/, everyone else the preview at /reports/.
   const [doc, setDoc] = useState(undefined);
   useEffect(() => {
+    if (authLoading) return;
     let dead = false; setDoc(undefined);
-    // CMS report (hub_reports, via src/lib/reports.js) → API → static file.
+    // CMS report (hub_reports, via src/lib/reports.js; the database hands a
+    // free reader the preview) → API → full file (subscribers) → preview.
     fetchReportHtml(reportRef)
       .then((cms) => cms || reportHtml(reportRef))
+      .then((html) => html || (subscriber ? fetchFullReport(reportRef) : null))
       .then((html) => { if (!dead) setDoc(html || null); })
       .catch(() => { if (!dead) setDoc(null); });
     return () => { dead = true; };
-  }, [reportRef]);
+  }, [reportRef, subscriber, authLoading]);
   // Frame height: the room under the report bar at the top of the page, so
   // the whole report view fits the screen and only the frame scrolls. Where
   // that room is too short to read in (landscape phones), the frame instead
   // fills the screen under the pinned bars, one page scroll down.
+  // The same goes for narrow, short phones (Fold cover 280px, SE 1st gen
+  // 320px), where the back row and the wrapped meta line leave the frame less
+  // than 60% of the screen (every other size leaves 62% or more): there the
+  // frame takes the whole screen under the pinned bars and the page scrolls
+  // that header block away.
   // `doc` re-runs this once the iframe has mounted (it renders only after the
   // report HTML has arrived); measured from the page top, so a scrolled page
-  // gives the same height.
+  // gives the same height. `lift` is true on those narrow, short phones only
+  // (see the report's scroll listener below).
+  const lift = useRef(false);
   useEffect(() => {
     const fit = () => {
       const fr = ref.current; if (!fr) return;
@@ -283,25 +297,49 @@ function ReportFrame({ i, reportRef, subscriber, onSubscribe, readerName }) {
       const pinned = (nav ? nav.offsetHeight : 64) + (tb && getComputedStyle(tb).position === "sticky" ? tb.offsetHeight : 0);
       const room = Math.round(window.innerHeight - top - 6);
       const cap = window.innerHeight - pinned - 8;
-      setH(room >= 300 ? room : Math.max(room, Math.min(480, cap)));
+      lift.current = room >= 300 && room < window.innerHeight * 0.6;
+      if (lift.current) setH(Math.max(room, cap));
+      else setH(room >= 300 ? room : Math.max(room, Math.min(480, cap)));
     };
     fit(); window.addEventListener("resize", fit);
     return () => window.removeEventListener("resize", fit);
   }, [reportRef, doc]);
+  // The broadcast goes into the frame's own card (v5 shell); see reportLock.applyBroadcastToFrame.
+  const eps = useReportBroadcast(reportRef);
   useEffect(() => {
     const fr = ref.current; if (!fr) return;
-    const onLoad = () => { prepareReportFrame(fr, { subscriber, onSubscribe, readerName }); };
+    const onLoad = () => {
+      prepareReportFrame(fr, { subscriber, onSubscribe, readerName, reportRef, reader });
+      if (eps !== undefined) applyBroadcastToFrame(fr, frameBroadcast(eps));
+      // A swipe on the report scrolls the report, never the page, so on those
+      // narrow, short phones the header block would stay unless the reader
+      // swiped on it. Reading down inside the report therefore scrolls the
+      // page to its end: the frame then fills the screen under the pinned
+      // bars. Scrolling the page back up shows the header again.
+      let sc = null;
+      try { sc = fr.contentDocument && fr.contentDocument.getElementById("readerScroll"); } catch { /* noop */ }
+      if (sc && !sc.__liftHost) {
+        let last = sc.scrollTop, at = 0;
+        sc.__liftHost = () => {
+          const y = sc.scrollTop, down = y > last; last = y;
+          if (!down || !lift.current || !fr.isConnected || Date.now() - at < 500) return;
+          const max = document.documentElement.scrollHeight - window.innerHeight;
+          if (window.scrollY < max - 1) { at = Date.now(); window.scrollTo({ top: max, behavior: "smooth" }); }
+        };
+        sc.addEventListener("scroll", sc.__liftHost, { passive: true });
+      }
+    };
     fr.addEventListener("load", onLoad);
     if (fr.contentDocument?.readyState === "complete" && fr.contentDocument.body?.children.length) onLoad();
     return () => { fr.removeEventListener("load", onLoad); };
-  }, [reportRef, subscriber, onSubscribe, readerName, doc]); // doc: the frame mounts only once the API answered
+  }, [reportRef, subscriber, onSubscribe, readerName, reader, doc, eps]); // doc: the frame mounts only once the API answered
   if (doc === undefined) return <div className="panel empty mono" style={{ margin: 22 }}>Loading the report…</div>;
   return doc
     ? <iframe ref={ref} className="report-frame" srcDoc={doc} title={i.headline} style={{ height: h }} />
     : <iframe ref={ref} className="report-frame" src={`/reports/${encodeURIComponent(reportRef)}.html`} title={i.headline} style={{ height: h }} />;
 }
 
-function ArticleView({ i: incoming, subscriber, back, backLabel, onSubscribe, readerName }) {
+function ArticleView({ i: incoming, subscriber, back, backLabel, onSubscribe, readerName, reader }) {
   const reportRef = reportRefFor(incoming.id);
   const [detail, setDetail] = useState(null);
   const [err, setErr] = useState(null);
@@ -313,7 +351,8 @@ function ArticleView({ i: incoming, subscriber, back, backLabel, onSubscribe, re
   useEffect(() => {
     let dead = false; setDetail(null); setErr(null);
     if (!subscriber) return;
-    loadIncidentDetail(i.id).then((d) => { if (!dead) setDetail(d); }).catch((e) => { if (!dead) setErr(e.message); });
+    // The technical error goes to the console; readers get plain words.
+    loadIncidentDetail(i.id).then((d) => { if (!dead) setDetail(d); }).catch((e) => { console.error("[dashboard] subscriber layer failed to load:", e); if (!dead) setErr("Could not load the subscriber layer right now. Please try again in a few minutes."); });
     return () => { dead = true; };
   }, [i.id, subscriber]);
   const paras = (i.body || "").split(/\n{2,}|\r?\n(?=\S)/).map((p) => p.trim()).filter(Boolean);
@@ -326,7 +365,7 @@ function ArticleView({ i: incoming, subscriber, back, backLabel, onSubscribe, re
           <div className="report-bar-meta"><Sev i={i} /><span className="cat">{i.cat} · {i.subcat || i.catName}</span><span className="mono" style={{ fontSize: 11, color: "var(--muted-light)" }}>{fmtDay(i.day)}</span><span className="mono" style={{ fontSize: 11, color: "var(--gold-text, #8A6D00)" }}>Full report · {reportRef}</span></div>
           <a className="btn" href={mapHref(i)} target="_blank" rel="noopener"><Icon name="pin" style={{ width: 13, height: 13, flexBasis: 13 }} /> On map</a>
         </div>
-        <ReportFrame i={i} reportRef={reportRef} subscriber={subscriber} onSubscribe={onSubscribe} readerName={readerName} />
+        <ReportFrame i={i} reportRef={reportRef} subscriber={subscriber} onSubscribe={onSubscribe} readerName={readerName} reader={reader} />
       </div>
     );
   }
@@ -342,7 +381,8 @@ function ArticleView({ i: incoming, subscriber, back, backLabel, onSubscribe, re
           <div className="copy">
             {paras.length ? <><h2>The briefing</h2>{paras.map((p, k) => <p key={k}>{p}</p>)}</> : <><h2>What happened</h2><p>{i.summary}</p></>}
             {i.rationale ? <><h2>Why it is rated S{i.severity}</h2><p className="rationale">{i.rationale}</p></> : null}
-            {i.secondary.length ? <><h2>Secondary GUARD mappings</h2><p>{i.secondary.map((s, k) => <span key={k} className="chip" style={{ height: 26, margin: "0 6px 6px 0" }}><span className="n">{s.cat}</span>{s.name}</span>)}</p></> : null}
+            {/* Chip size and spacing live in dashboard.css (.article-body .copy .chip), where a label wider than the column wraps inside its chip. */}
+            {i.secondary.length ? <><h2>Secondary GUARD mappings</h2><p>{i.secondary.map((s, k) => <span key={k} className="chip"><span className="n">{s.cat}</span>{s.name}</span>)}</p></> : null}
             {subscriber && detail && (
               <>
                 <h2>Named blast radius <span className="mono" style={{ fontSize: 12, color: "var(--gold-text, #8A6D00)" }}>{detail.blast.length}</span></h2>
@@ -439,7 +479,9 @@ export function Dashboard({ initialPage = "dashboard" }) {
     let dead = false; setP(null); setErr(null);
     loadIndustry(industry)
       .then((d) => { if (dead) return; setP(d); return loadIndustryExtras(industry).then((x) => { if (!dead) setP((p) => p && p.industry === industry ? { ...p, ...x } : p); }); })
-      .catch((e) => { if (!dead) setErr(e.message || String(e)); });
+      // Backend errors (e.g. the service being restricted) are technical text:
+      // logged for us, a short plain message for the reader.
+      .catch((e) => { console.error("[dashboard] industry failed to load:", e); if (!dead) setErr("Could not load your industry right now. Please refresh the page or try again in a few minutes."); });
     return () => { dead = true; };
   }, [industry]);
   const go = useCallback((p) => { setPage(p); setSideOpen(false); setMenu(false); window.scrollTo({ top: 0, behavior: "smooth" }); }, []);
@@ -514,10 +556,10 @@ export function Dashboard({ initialPage = "dashboard" }) {
             </button>
           </header>
 
-          {err && <div className="content"><div className="panel empty" style={{ color: "#B21F31" }}>Could not load your industry: {err}</div></div>}
+          {err && <div className="content"><div className="panel empty" style={{ color: "#B21F31" }}>{err}</div></div>}
           {!P && !err && <div className="content"><div className="panel empty mono">Loading {industry}…</div></div>}
           {P && page === "dashboard" && <YourIndustry P={P} name={name} subscriber={subscriber} query={query} onOpen={openArticle} onSubscribe={() => openSubscribe()} go={go} />}
-          {P && page === "article" && article && <ArticleView key={`${article.id}-${reportsReady}`} readerName={profile?.full_name || user?.email || ""} i={article} subscriber={subscriber} back={() => go(lastPage)} backLabel="Back to your industry" onSubscribe={() => openSubscribe()} />}
+          {P && page === "article" && article && <ArticleView key={`${article.id}-${reportsReady}`} readerName={profile?.full_name || user?.email || ""} reader={readerLicence(profile, user, subscriber)} i={article} subscriber={subscriber} back={() => go(lastPage)} backLabel="Back to your industry" onSubscribe={() => openSubscribe()} />}
         </main>
       </div>
 
@@ -525,7 +567,7 @@ export function Dashboard({ initialPage = "dashboard" }) {
       {menu && (
         <div className="profile-menu open" style={{ top: navH + 54 }}>
           <a href="/?profile">Profile</a>
-          {subscriber && user && tier !== "admin" && <button onClick={async () => { try { await setSubscribed(false); toast("Subscription switched off."); } catch (e) { toast(e.message); } setMenu(false); }}>Switch off subscription</button>}
+          {subscriber && user && tier !== "admin" && <button onClick={async () => { try { await setSubscribed(false); toast("Subscription switched off."); } catch (e) { console.error("[dashboard] switching off the subscription failed:", e); toast("Could not switch off the subscription. Please try again."); } setMenu(false); }}>Switch off subscription</button>}
           {!subscriber && <button onClick={() => { setMenu(false); openSubscribe(); }}>Subscribe</button>}
           <a href="/?home">Landing page</a>
           <button onClick={() => { setMenu(false); user ? signOut() : (window.location.href = "/?home"); }}>{user ? "Sign out" : "Exit preview"}</button>

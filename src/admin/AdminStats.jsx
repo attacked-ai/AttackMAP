@@ -146,7 +146,7 @@ export function AdminStats() {
 
       {/* ── HERO ROW — Today + new + active ───────────────────────────── */}
       <SectionTitle>Today's Pulse</SectionTitle>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 12, marginBottom: 28 }}>
+      <div className="adm-tiles4" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 12, marginBottom: 28 }}>
         <Tile big label="New signups today" value={fmtNum(u.new_today)} color={BRAND.gold} hint={`+${u.new_7d || 0} in last 7d`} />
         <Tile big label="Active users (7d)" value={fmtNum(u.active_7d)} color={BRAND.green} hint={`of ${u.total} total`} />
         <Tile big label="Last digest" value={fmtRel(em.last_digest_sent_at)} color={BRAND.cyan} hint={em.last_digest_date ? `for ${em.last_digest_date}` : "no digest yet"} />
@@ -155,12 +155,12 @@ export function AdminStats() {
 
       {/* ── USERS ──────────────────────────────────────────────────────── */}
       <SectionTitle>Users — {fmtNum(u.total)} total</SectionTitle>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 10, marginBottom: 14 }}>
+      <div className="adm-tiles4" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 10, marginBottom: 14 }}>
         {Object.entries(TIER_LABEL).map(([tierKey, label]) => (
           <Tile key={tierKey} label={label} value={fmtNum(byTier[tierKey] || 0)} color={TIER_COLOR[tierKey]} />
         ))}
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10, marginBottom: 28 }}>
+      <div className="adm-tiles3" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10, marginBottom: 28 }}>
         <Tile label="Email subscribed" value={fmtNum(u.subscribed)} color={BRAND.gold} hint={`${Math.round(((u.subscribed || 0) / Math.max(u.total, 1)) * 100)}% of users`} />
         <Tile label="New in 30 days" value={fmtNum(u.new_30d)} color={BRAND.green} />
         <Tile label="Active in 7 days" value={fmtNum(u.active_7d)} color={BRAND.cyan} />

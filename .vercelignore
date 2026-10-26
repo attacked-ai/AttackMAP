@@ -10,4 +10,13 @@ build_demo_doc.cjs
 Attacked.ai Demo Script.docx
 
 # The FastAPI service is hosted separately, never as Vercel functions
-api/
+# (api/report-pdf.mjs and api/_lib ARE Vercel functions: the licensed PDF)
+api/app/
+api/requirements.txt
+api/README.md
+api/.env
+api/.env.*
+
+# Design-review copies (local only)
+public/reports-blur/
+review/
