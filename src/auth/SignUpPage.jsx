@@ -176,12 +176,21 @@ export function SignUpPage() {
   }
 
   // The bridge does not offer the sign-up page's own routes: sign up on
-  // WorkOS's hosted page, answers kept for the way back. Not when WorkOS's
-  // page just sent the reader here (its "Sign up" link can point at this
-  // page): that would go round in circles.
+  // WorkOS's hosted page, answers kept for the way back. Not twice within two
+  // minutes in this tab: WorkOS's sign-up URL points at this page (since 26
+  // Oct its hosted sign-up screen sends the reader straight back here, with
+  // no referrer), so a second try would only go round in circles.
   async function hostedSignup() {
-    const fromWorkOS = /\.authkit\.app|workos\.com/i.test(document.referrer || "");
-    if (fromWorkOS) { setError("Sign-up isn't available right now. Please try again in a few minutes."); setBusy(false); return; }
+    const KEY = "attacked.signupHostedAt";
+    let last = 0;
+    try { last = Number(sessionStorage.getItem(KEY)) || 0; } catch { /* storage blocked */ }
+    if (Date.now() - last < 120_000 || /\.authkit\.app|workos\.com/i.test(document.referrer || "")) {
+      try { sessionStorage.removeItem(KEY); } catch { /* storage blocked */ }
+      setError("Sign-up isn't available right now. Please try again in a few minutes.");
+      setBusy(false);
+      return;
+    }
+    try { sessionStorage.setItem(KEY, String(Date.now())); } catch { /* storage blocked */ }
     setStep("away"); setBusy("signin");
     setNote("Sign-up continues on the secure WorkOS page. Your answers are saved for when you come back.");
     try { await startHosted("sign-up", back, undefined, EMAIL.test(cleanEmail) ? cleanEmail : undefined, answers()); }

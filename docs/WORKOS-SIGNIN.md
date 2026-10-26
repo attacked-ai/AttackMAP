@@ -134,12 +134,15 @@ Docker stack, 50 checks), both in the session scratchpad.
 
 ## After going live (bridge, then site)
 
-1. **WorkOS's own "Sign up" link** (on its sign-in page) still opens WorkOS's sign-up.
-   The Staging AuthKit application has a `signUpUrl` setting (empty today) whose effect
-   WorkOS does not document. Once the new site is live: set it to
-   `https://attackedmap.vercel.app/?signup`, open the WorkOS sign-in page and check where
-   "Sign up" goes. Keep it if it opens `/?signup`; clear it otherwise. Never set it while
-   the live site has no `/?signup` page, or while `BRIDGE_SIGNUP_FORM=off`.
+1. **WorkOS's own "Sign up" link: DONE 26 Oct.** The Staging AuthKit application's
+   `signUpUrl` is `https://attackedmap.vercel.app/?signup` (was empty). Checked: the
+   "Sign up" link on the WorkOS sign-in page opens `/?signup`, and WorkOS now sends even
+   its own hosted sign-up screen (`screen_hint=sign-up`) there, so every sign-up goes
+   through the one page. Consequence: the sign-up page's fallback to WorkOS's sign-up
+   (when the bridge doesn't say `signup_form: true`) comes straight back; the page
+   refuses a second try within 2 minutes and says sign-up is unavailable. So before
+   `BRIDGE_SIGNUP_FORM=off` or a rollback to bridge v4, clear `signUpUrl` (WorkOS MCP
+   `updateAuthkitApplication`, application `app_01M4APWJ9BH9R1DJ6SPZATMXWM`).
 2. **Supabase's own sign-up** (Authentication → Sign In / Providers → "Allow new users to
    sign up") can go off: the WorkOS build never uses it (the bridge creates accounts with
    the admin API, which that switch does not block). Keep "Confirm email" on. This is
