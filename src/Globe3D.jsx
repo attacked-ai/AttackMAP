@@ -20,63 +20,19 @@ const SEV_COLOR = {
   1: "#8E8E93", // MINIMAL
 };
 
-// ── Incident marker artwork ────────────────────────────────────────────────
-// Markers were a 22 px solid dot with a 2 px white outline. That heavy white
-// ring read as a generic consumer map pin, and at 22 px a busy day (the Gulf,
-// say) collapsed into one unreadable blob. They are now a reticle: a 3 px core
-// inside four ticks, which stays separable when incidents overlap and reads as
-// a surveillance instrument rather than a pushpin.
-//
-// Drawn to a canvas rather than shipped as an image so the colour follows the
-// severity scale, and cached per colour — there are only five severity
-// colours, so ~1,000 incidents share five bitmaps instead of allocating one
-// canvas each.
-const MARKER_PX = 28;      // logical footprint; the visible core is far smaller
-const MARKER_SS = 2;       // supersample so the 1 px strokes stay crisp on HiDPI
-
-function _markerCanvas(hex, draw) {
-  const cv = document.createElement("canvas");
-  cv.width = cv.height = MARKER_PX * MARKER_SS;
-  const g = cv.getContext("2d");
-  g.scale(MARKER_SS, MARKER_SS);
-  g.strokeStyle = hex;
-  g.fillStyle = hex;
-  draw(g, MARKER_PX / 2);
-  return cv;
-}
-
-const _reticleCache = new Map();
-function reticleCanvas(hex) {
-  let cv = _reticleCache.get(hex);
-  if (cv) return cv;
-  cv = _markerCanvas(hex, (g, c) => {
-    g.globalAlpha = 0.45; g.lineWidth = 1;              // containment ring
-    g.beginPath(); g.arc(c, c, 11.5, 0, Math.PI * 2); g.stroke();
-    g.globalAlpha = 0.95; g.lineWidth = 1.4;            // four ticks, gapped
-    g.beginPath();
-    g.moveTo(c, c - 13); g.lineTo(c, c - 8);
-    g.moveTo(c, c + 8);  g.lineTo(c, c + 13);
-    g.moveTo(c - 13, c); g.lineTo(c - 8, c);
-    g.moveTo(c + 8, c);  g.lineTo(c + 13, c);
-    g.stroke();
-    g.globalAlpha = 1;                                   // solid core
-    g.beginPath(); g.arc(c, c, 3, 0, Math.PI * 2); g.fill();
-  });
-  _reticleCache.set(hex, cv);
-  return cv;
-}
-
-const _pulseCache = new Map();
-function pulseRingCanvas(hex) {
-  let cv = _pulseCache.get(hex);
-  if (cv) return cv;
-  cv = _markerCanvas(hex, (g, c) => {
-    g.lineWidth = 1.6;
-    g.beginPath(); g.arc(c, c, 8, 0, Math.PI * 2); g.stroke();
-  });
-  _pulseCache.set(hex, cv);
-  return cv;
-}
+// ── Incident markers ───────────────────────────────────────────────────────
+// Until 2026-10-27 markers were canvas billboards (a reticle with a 3 px core).
+// On the live globe they did not show at all — billboards clamped to the
+// ground were hidden under the imagery — and even where they drew, a 3 px core
+// was lost against the satellite texture (owner: "dot is not properly
+// visible"). They are now Cesium points, which always draw: a solid
+// severity-coloured core with a white rim, over a soft halo of the same
+// colour, so a dot reads on desert, ocean and night imagery alike. Bigger for
+// worse severities; CRITICAL also pulses.
+const CORE_PX = { 5: 18, 4: 16, 3: 14, 2: 12, 1: 12 };
+const HALO_PX = 2.6;       // halo diameter = core × this
+// Points keep a readable size from the whole-globe view down to city level.
+const markerScale = (Cesium) => new Cesium.NearFarScalar(1.5e6, 1.15, 4.0e7, 1.0);
 
 // Longitude roughly under the user's local timezone (UTC offset × 15°/hour).
 // The globe opens over the user's part of the world, so its day/night state
@@ -762,26 +718,30 @@ function resolveCoords(inc) {
       if (!coords) return;
       const [lng, lat] = coords;
       const hex = SEV_COLOR[inc.severity] || SEV_COLOR[3];
+      const color = Cesium.Color.fromCssColorString(hex);
+      const core = CORE_PX[inc.severity] || CORE_PX[3];
+      const position = Cesium.Cartesian3.fromDegrees(lng, lat);
+      // Halo first so the core draws over it; clicks on it still open the incident.
+      const halo = viewer.entities.add({
+        position,
+        point: { pixelSize: core * HALO_PX, color: color.withAlpha(0.28), outlineWidth: 0, scaleByDistance: markerScale(Cesium) },
+      });
+      halo._incident = inc;
       const entity = viewer.entities.add({
         id: String(inc._id),
-        position: Cesium.Cartesian3.fromDegrees(lng, lat),
-        billboard: {
-          image: reticleCanvas(hex),
-          width: MARKER_PX,
-          height: MARKER_PX,
-          heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
-          // Tighter range than the old dot: the reticle carries detail, so
-          // blowing it up close-in just makes it coarse.
-          scaleByDistance: new Cesium.NearFarScalar(1.5e6, 1.25, 4.0e7, 0.55),
+        position,
+        point: {
+          pixelSize: core,
+          color,
+          outlineColor: Cesium.Color.WHITE.withAlpha(0.95),
+          outlineWidth: 2,
+          scaleByDistance: markerScale(Cesium),
         },
       });
       entity._incident = inc;
 
       // CRITICAL only — a slow outward pulse, so the eye lands on the worst
-      // incident of the day without every marker competing. Deliberately not
-      // applied to all five tiers: the globe renders one day at a time (a
-      // handful of severity-5 pins), whereas animating the full set would put
-      // a CallbackProperty on ~1,000 entities for no read-through.
+      // incident of the day without every marker competing.
       if (inc.severity === 5) {
         const t0 = (typeof performance !== "undefined" ? performance.now() : Date.now());
         const phase = () => {
@@ -789,16 +749,13 @@ function resolveCoords(inc) {
           return ((now - t0) % 2400) / 2400;   // 0→1 every 2.4s
         };
         const pulse = viewer.entities.add({
-          position: Cesium.Cartesian3.fromDegrees(lng, lat),
-          billboard: {
-            image: pulseRingCanvas(hex),
-            width: MARKER_PX,
-            height: MARKER_PX,
-            heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
-            scale: new Cesium.CallbackProperty(() => 0.5 + phase() * 1.4, false),
-            // WHITE multiplier keeps the ring's own colour; only alpha moves.
-            color: new Cesium.CallbackProperty(
-              () => Cesium.Color.WHITE.withAlpha(0.6 * (1 - phase())), false),
+          position,
+          point: {
+            pixelSize: new Cesium.CallbackProperty(() => core * (1.2 + phase() * 2.6), false),
+            color: Cesium.Color.TRANSPARENT,
+            outlineColor: new Cesium.CallbackProperty(() => color.withAlpha(0.8 * (1 - phase())), false),
+            outlineWidth: 2,
+            scaleByDistance: markerScale(Cesium),
           },
         });
         // So a click that lands on the expanding ring still opens the incident

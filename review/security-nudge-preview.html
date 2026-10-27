@@ -29,8 +29,7 @@ import { SecurityNudgeFor } from "/src/auth/SecurityNudge.jsx";
 const q = new URLSearchParams(location.search);
 const state = q.get("state") || "off";
 document.getElementById("st").textContent = state;
-if (!q.has("keep")) { try { localStorage.removeItem("atk.securityNudge"); } catch {} }
-try { sessionStorage.removeItem("atk.securityNudge.seen"); } catch {}
+if (!q.has("keep")) { try { localStorage.removeItem("atk.securityPrompt"); } catch {} }
 window.__bridgeCalls = 0;
 supabase.auth.getSession = async () => ({ data: { session: { access_token: "preview.token.only" } }, error: null });
 const real = window.fetch.bind(window);
@@ -43,12 +42,12 @@ window.fetch = async (url, init = {}) => {
   if (state === "down") return res(404, { error: "not found" });
   return res(200, { workos: true, totp: { on: state === "on" }, method: state === "passkey" ? "Passkey" : "GoogleOAuth", strong: false, recent: true });
 };
-const info = () => { let s = null; try { s = JSON.parse(localStorage.getItem("atk.securityNudge") || "null"); } catch {}
-  const v = s && s["preview-user"]; document.getElementById("info").textContent = v ? `snoozed ×${v.count} until ${new Date(v.until).toLocaleDateString("en-GB")}` : "not snoozed"; };
+const info = () => { let s = null; try { s = JSON.parse(localStorage.getItem("atk.securityPrompt") || "null"); } catch {}
+  const v = s && s["preview-user"]; document.getElementById("info").textContent = v ? `handled sign-in ${v}` : "not handled yet"; };
 info(); window.addEventListener("click", () => setTimeout(info, 50));
 createRoot(document.getElementById("root")).render(
   React.createElement(React.StrictMode, null,
-    React.createElement(SecurityNudgeFor, { user: { id: "preview-user", app_metadata: {} }, profile: { industry: "Finance" }, loading: false })));
+    React.createElement(SecurityNudgeFor, { user: { id: "preview-user", email: "reader@example.com", last_sign_in_at: "2026-10-27T10:00:00Z", app_metadata: {} }, loading: false })));
 </script>
 </body>
 </html>

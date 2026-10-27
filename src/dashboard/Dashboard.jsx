@@ -1,8 +1,11 @@
 // Dashboard — the signed-in home. Personalised to profiles.industry.
 //
-// Ported from dashboard-industry/template.html (the approved prototype). Three
-// views inside one shell: Your Industry, an article reader, and (removed
-// profile fields), and an article view. The Attack Hub and the Attack Map
+// Ported from dashboard-industry/template.html (the approved prototype). Two
+// views inside one shell: Your Industry and an article reader. The dark left
+// sidebar (Your Industry / Blast Radius / GUARD Controls / Peer Watchlist /
+// Subscription, LOCKED tags, Subscribe card) was removed on 2026-10-27 (owner's
+// call): the page is full width, with a figures strip under the masthead and
+// a live-map card in the right rail, after the desktop prototypes. The Attack Hub and the Attack Map
 // elements were removed from the dashboard on 2026-09-22 (owner's call: the
 // dashboard is the industry page only for now; both stay in git history).
 //
@@ -140,7 +143,7 @@ function ArtCanvas({ points, className }) {
 }
 
 // ── views ──────────────────────────────────────────────────────────────────
-function YourIndustry({ P, name, subscriber, query, onOpen, onSubscribe, go }) {
+function YourIndustry({ P, name, subscriber, query, onOpen, onSubscribe, go, needsIndustry, onPickIndustry }) {
   const [filter, setFilter] = useState("all");
   useEffect(() => { setFilter("all"); }, [P.industry]);
   const h = new Date().getHours();
@@ -178,6 +181,7 @@ function YourIndustry({ P, name, subscriber, query, onOpen, onSubscribe, go }) {
               <span>·</span>
               <span>{subscriber ? "Blast radius, GUARD controls and peer watchlist unlocked" : "Every incident in your industry, classified"}</span>
             </div>
+            <a className="mast-link" href="/?profile#work">Change industry →</a>
           </div>
         </div>
         <div className="mast-art" aria-hidden="true"
@@ -186,6 +190,27 @@ function YourIndustry({ P, name, subscriber, query, onOpen, onSubscribe, go }) {
                alt="" width="1220" height="860" decoding="async" fetchpriority="high"
                onError={(e) => { e.currentTarget.style.display = "none"; }} />
         </div>
+      </section>
+
+      {needsIndustry && (
+        <section className="pick-industry" aria-labelledby="pick-industry-h">
+          <div>
+            <h2 id="pick-industry-h">Make this dashboard yours</h2>
+            <p>You're seeing {P.industry} as an example. Choose your industry and every card, figure and brief here follows it. You can change it any time in your profile.</p>
+          </div>
+          <select defaultValue="" aria-label="Your industry" onChange={(e) => { if (e.target.value) onPickIndustry(e.target.value); }}>
+            <option value="" disabled>Choose your industry</option>
+            {SECTORS.map(([s, list]) => <optgroup key={s} label={s}>{list.map((x) => <option key={x} value={x}>{x}</option>)}</optgroup>)}
+          </select>
+        </section>
+      )}
+
+      <section className="kpis" aria-label={`${P.industry} at a glance`}>
+        <div className="kpi"><Icon name="pulse" /><div><b className="num">{P.week}</b><span>this week</span></div></div>
+        <div className="kpi"><Icon name="bell" /><div><b className="num">{P.critical}</b><span>High or Critical</span></div></div>
+        <div className="kpi"><Icon name="database" /><div><b className="num">{P.total}</b><span>in your archive</span></div></div>
+        <div className="kpi"><Icon name="bars" /><div><b>{top ? top.name : "—"}</b><span>hardest-hit category</span></div></div>
+        <a className="kpi kpi-map" href="/?map" target="_blank" rel="noopener"><Icon name="globe" /><div><b>Live Attack Map</b><span>every incident, geolocated</span></div><span className="kpi-go">→</span></a>
       </section>
 
       <div className="grid">
@@ -209,6 +234,16 @@ function YourIndustry({ P, name, subscriber, query, onOpen, onSubscribe, go }) {
         </section>
 
         <aside className="right">
+          <a className="panel map-card" href="/?map" target="_blank" rel="noopener">
+            <ArtCanvas points={P.incidents} className="map-card-art" />
+            <div className="map-card-copy">
+              <span className="tiny">Attack Map</span>
+              <b>Every incident, geolocated.</b>
+              <span className="map-card-stats"><span><b className="num">{P.total}</b> in {P.industry}</span><span><b className="num">{P.critical}</b> High or Critical</span></span>
+              <span className="map-card-go">Open the live map →</span>
+            </div>
+          </a>
+
           <section className="panel today">
             <h2>Latest across all sectors</h2>
             <p>The most recent high-severity incidents beyond your industry.</p>
@@ -433,6 +468,18 @@ export function Dashboard({ initialPage = "dashboard" }) {
   // genuinely have none (older accounts, social sign-ins).
   const metaIndustry = user?.user_metadata?.industry || null;
   const [industry, setIndustry] = useState(() => profile?.industry || metaIndustry || (preview ? DEFAULT_INDUSTRY : null));
+  // No industry on the account (made before the sign-up page, or through
+  // "Sign in" with Google): the dashboard still opens, on an example
+  // industry, with a "Make this dashboard yours" picker on top. Nobody is
+  // stopped by a question after signing in (owner, 2026-10-27).
+  const needsIndustry = !preview && !authLoading && !!user && !!profile && !profile.industry && !metaIndustry;
+  useEffect(() => { if (needsIndustry && !industry) setIndustry(DEFAULT_INDUSTRY); }, [needsIndustry, industry]);
+  const [picked, setPicked] = useState(false);
+  const pickIndustry = useCallback(async (v) => {
+    setPicked(true); setIndustry(v);
+    // The first industry stamps onboarded_at, which sends the welcome email (as the sign-up page does).
+    await saveProfileBasics({ industry: v, ...(profile && !profile.onboarded_at ? { onboarded_at: new Date().toISOString() } : {}) });
+  }, [saveProfileBasics, profile]);
   useEffect(() => { const want = profile?.industry || metaIndustry; if (want && want !== industry) setIndustry(want); }, [profile?.industry, metaIndustry]); // eslint-disable-line
   // Profile row without an industry but sign-up details with one: repair the row once.
   useEffect(() => { if (user && profile && !profile.industry && metaIndustry) saveProfileBasics({ industry: metaIndustry }); }, [user, profile?.industry, metaIndustry]); // eslint-disable-line
@@ -444,8 +491,8 @@ export function Dashboard({ initialPage = "dashboard" }) {
   const [err, setErr] = useState(null);
   const [reportsReady, setReportsReady] = useState(false);
   useEffect(() => { loadReportIndex().then(() => setReportsReady(true)); }, []);
-  // The shared navbar sits above the app shell and the sidebar is fixed, so the
-  // sidebar has to start below it. Measured rather than hard-coded, because the
+  // The shared navbar sits above the app shell, and the profile menu opens just
+  // below the sticky topbar under it. Measured rather than hard-coded, because the
   // navbar grows a second row on narrow screens.
   const [navH, setNavH] = useState(73);
   useEffect(() => {
@@ -458,7 +505,6 @@ export function Dashboard({ initialPage = "dashboard" }) {
     return () => ro.disconnect();
   }, []);
   const [menu, setMenu] = useState(false);
-  const [sideOpen, setSideOpen] = useState(false);
   const [toastMsg, setToastMsg] = useState(null);
   const toast = useCallback((m) => { setToastMsg(m); setTimeout(() => setToastMsg(null), 2400); }, []);
   // The open profile menu also closes on Escape, and once the page has
@@ -484,7 +530,7 @@ export function Dashboard({ initialPage = "dashboard" }) {
       .catch((e) => { console.error("[dashboard] industry failed to load:", e); if (!dead) setErr("Could not load your industry right now. Please refresh the page or try again in a few minutes."); });
     return () => { dead = true; };
   }, [industry]);
-  const go = useCallback((p) => { setPage(p); setSideOpen(false); setMenu(false); window.scrollTo({ top: 0, behavior: "smooth" }); }, []);
+  const go = useCallback((p) => { setPage(p); setMenu(false); window.scrollTo({ top: 0, behavior: "smooth" }); }, []);
   const openArticle = useCallback((i) => { setLastPage(page); setArticle(i); go("article"); }, [page, go]);
   const name = useMemo(() => {
     const full = profile?.full_name || user?.user_metadata?.full_name || user?.user_metadata?.first_name || "";
@@ -494,58 +540,12 @@ export function Dashboard({ initialPage = "dashboard" }) {
   const initials = useMemo(() => (profile?.full_name || user?.email || "AI").split(/[\s@]/).slice(0, 2).map((s) => s[0]?.toUpperCase() || "").join("") || "AI", [profile, user]);
 
 
-  // First-run: an account with no industry yet (older sign-ups) picks one here.
-  if (!industry) {
-    return (
-      <div className="dash"><SiteNav /><div className="content" style={{ maxWidth: 620, paddingTop: 60 }}>
-        <section className="panel settings-card">
-          <h2>Which industry should your dashboard lead with?</h2>
-          <p>Your account has no industry on file yet. Pick one and we will build your view around it. Tell us if it should change later.</p>
-          <div className="field"><label>Primary industry</label>
-            <select defaultValue="" onChange={async (e) => { const v = e.target.value; if (!v) return; await saveProfileBasics({ industry: v }); setIndustry(v); }}>
-              <option value="" disabled>Select your industry</option>
-              {SECTORS.map(([s, list]) => <optgroup key={s} label={s}>{list.map((i) => <option key={i} value={i}>{i}</option>)}</optgroup>)}
-            </select>
-          </div>
-          {authLoading ? <p className="mono" style={{ color: "var(--muted-light)" }}>Loading your profile…</p> : null}
-        </section>
-      </div></div>
-    );
-  }
-
   return (
     <div className="dash">
       <SiteNav />
       <div className="app" style={{ minHeight: `calc(100vh - ${navH}px)` }}>
-        <aside className={`sidebar ${sideOpen ? "open" : ""}`} style={{ top: navH }}>
-          <div className="side-label">Intelligence</div>
-          <nav className="nav">
-            <button className={`nav-btn ${page === "dashboard" || (page === "article" && lastPage === "dashboard") ? "active" : ""}`} onClick={() => go("dashboard")}><Icon name="home" />Your Industry</button>
-          </nav>
-          <div className="side-label">Subscriber</div>
-          <nav className="nav">
-            {[["radar", "Blast Radius"], ["shield", "GUARD Controls"], ["users", "Peer Watchlist"]].map(([ic, lbl]) => (
-              <button key={lbl} className="nav-btn" onClick={() => subscriber ? go("dashboard") : openSubscribe()}><Icon name={ic} />{lbl}<span className="tag" style={subscriber ? { background: "rgba(52,199,89,.18)", color: "#34C759" } : undefined}>{subscriber ? "ON" : "LOCKED"}</span></button>
-            ))}
-            <a className="nav-btn" href="/?subscribe"><Icon name="file" />Subscription</a>
-          </nav>
-          <div className="side-spacer" />
-          {!subscriber && (
-            <div className="upgrade-card">
-              <div className="eyebrow">Subscribe</div>
-              <h4>See who is exposed, not just what happened.</h4>
-              <p>Named blast radius, adaptive GUARD controls and the peer watchlist on every incident in your industry.</p>
-              <button onClick={() => openSubscribe()}>Subscribe →</button>
-            </div>
-          )}
-          <div className="side-footer">Free: every incident in your industry, classified.<br />Subscriber: who it reaches and what to do.</div>
-        </aside>
-        {/* Phone drawer backdrop (CSS shows it only at <=760px): dims the page and closes the drawer on tap. */}
-        <div className={`side-backdrop ${sideOpen ? "open" : ""}`} style={{ top: navH }} onClick={() => setSideOpen(false)} aria-hidden="true" />
-
         <main className="main">
           <header className="topbar">
-            <button className="mobile-menu" aria-label="Dashboard sections" aria-expanded={sideOpen} onClick={() => setSideOpen(!sideOpen)}><Icon name="sidebar" /></button>
             <div className="search"><svg viewBox="0 0 24 24">{ICONS.search}</svg><input type="search" placeholder="Search incidents, companies or countries…" value={query} onChange={(e) => setQuery(e.target.value)} /><span className="shortcut">⌘ K</span></div>
             <div className="top-spacer" />
             {preview && <div className="persona"><span>Preview as</span><select value={industry} onChange={(e) => setIndustry(e.target.value)}>{INDUSTRIES.map((i) => <option key={i} value={i}>{i}</option>)}</select></div>}
@@ -557,8 +557,8 @@ export function Dashboard({ initialPage = "dashboard" }) {
           </header>
 
           {err && <div className="content"><div className="panel empty" style={{ color: "#B21F31" }}>{err}</div></div>}
-          {!P && !err && <div className="content"><div className="panel empty mono">Loading {industry}…</div></div>}
-          {P && page === "dashboard" && <YourIndustry P={P} name={name} subscriber={subscriber} query={query} onOpen={openArticle} onSubscribe={() => openSubscribe()} go={go} />}
+          {!P && !err && <div className="content"><div className="panel empty mono">{industry ? `Loading ${industry}…` : "Loading your dashboard…"}</div></div>}
+          {P && page === "dashboard" && <YourIndustry P={P} name={name} subscriber={subscriber} query={query} onOpen={openArticle} onSubscribe={() => openSubscribe()} go={go} needsIndustry={needsIndustry && !picked} onPickIndustry={pickIndustry} />}
           {P && page === "article" && article && <ArticleView key={`${article.id}-${reportsReady}`} readerName={profile?.full_name || user?.email || ""} reader={readerLicence(profile, user, subscriber)} i={article} subscriber={subscriber} back={() => go(lastPage)} backLabel="Back to your industry" onSubscribe={() => openSubscribe()} />}
         </main>
       </div>
@@ -567,6 +567,7 @@ export function Dashboard({ initialPage = "dashboard" }) {
       {menu && (
         <div className="profile-menu open" style={{ top: navH + 54 }}>
           <a href="/?profile">Profile</a>
+          <a href="/?profile#security">Login and security</a>
           {subscriber && user && tier !== "admin" && <button onClick={async () => { try { await setSubscribed(false); toast("Subscription switched off."); } catch (e) { console.error("[dashboard] switching off the subscription failed:", e); toast("Could not switch off the subscription. Please try again."); } setMenu(false); }}>Switch off subscription</button>}
           {!subscriber && <button onClick={() => { setMenu(false); openSubscribe(); }}>Subscribe</button>}
           <a href="/?home">Landing page</a>

@@ -17,6 +17,8 @@ const PATHS = {
   tablet: <><rect x="4.5" y="2.5" width="15" height="19" rx="2" /><path d="M11 18.5h2" /></>,
   fingerprint: <><path d="M5 10.5a7 7 0 0 1 14 0" /><path d="M7.5 12a4.5 4.5 0 0 1 9 0c0 3-.6 5.6-1.6 8" /><path d="M12 12v1.5c0 2.8-.6 5.2-1.7 7.5" /><path d="M9.6 15.5c-.2 1.8-.7 3.4-1.4 4.9" /></>,
   check: <path d="M5 12.5l4.5 4.5L19 7.5" />,
+  // Okta Verify row: a plain ring mark (no vendor logo).
+  okta: <><circle cx="12" cy="12" r="8.5" /><circle cx="12" cy="12" r="3.5" /></>,
   info: <><circle cx="12" cy="12" r="9" /><path d="M12 11v5M12 8h.01" /></>,
 };
 

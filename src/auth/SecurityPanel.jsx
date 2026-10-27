@@ -6,8 +6,9 @@
 //           accounts (read-only: WorkOS has no unlink), last sign-in,
 //           signed-in devices (one row per device, "Sign out" on every other
 //           one, and Supabase's "sign out everywhere else" at the bottom).
-//   Two-step verification — Passkey and Authenticator app rows, each with a
-//           "Set up". Optional, never forced; switched off here at any time.
+//   Two-step verification — Passkey, Okta Verify and Authenticator app rows
+//           (MongoDB's list), each with a "Set up". Okta Verify and the
+//           authenticator app share the one code factor WorkOS keeps. Optional, never forced; switched off here at any time.
 // The bridge (supabase/functions/workos-auth, /security routes) does the
 // work. GET /security?full=1 is the only status request; the presence of its
 // `signed_in_at` key tells the page the bridge is new enough (v8) for the
@@ -47,6 +48,7 @@ export function SecurityPanel() {
   const [pwMsg, setPwMsg] = useState(null);        // { ok, text, reauth } — the password row
   const [others, setOthers] = useState("idle");    // idle | confirm | busy | done | error
   const [passkeyInfo, setPasskeyInfo] = useState(false);
+  const [app, setApp] = useState("authenticator"); // which row's "Set up" opened the code set-up: authenticator | okta
   const [retry, setRetry] = useState(null);        // linked accounts "Try again": null | "busy" | "done"
   const [devices, setDevices] = useState(NO_DEVICES);
   const [now, setNow] = useState(() => Date.now()); // "Last active …" is read against this; ticks every minute while the list is up
@@ -137,7 +139,7 @@ export function SecurityPanel() {
     }
     finally { setBusy(null); }
   };
-  const start = () => { remember(); run("start", async () => { setSetup(await securityApi("/totp/start", {})); setCode(""); setCopy(null); setStep("setup"); }); };
+  const start = (which = "authenticator") => { remember(); setApp(which); run("start", async () => { setSetup(await securityApi("/totp/start", {})); setCode(""); setCopy(null); setStep("setup"); }); };
   const confirm = (e) => { e.preventDefault(); run("confirm", async () => {
     await securityApi("/totp/confirm", { setup: setup.setup, code });
     setStatus((s) => ({ ...s, totp: { ...(s && s.totp), on: true, since: new Date().toISOString() } }));
@@ -254,7 +256,7 @@ export function SecurityPanel() {
 
       <TwoStepCard status={status} loading={loading} noWorkos={noWorkos} on={on} bridgeOff={bridgeOff} disabledTitle={disabledTitle}
         busy={busy} step={step} setup={setup} code={code} copy={copy} msg={msg} passkeyInfo={passkeyInfo} hasPassword={hasPassword} tier={tier}
-        titleRef={titleRef} flowRef={flowRef} onStart={start} onConfirm={confirm} onRemove={remove} onOpenRemove={openRemove} onCancel={cancel}
+        app={app} titleRef={titleRef} flowRef={flowRef} onStart={() => start("authenticator")} onStartOkta={() => start("okta")} onConfirm={confirm} onRemove={remove} onOpenRemove={openRemove} onCancel={cancel}
         onCopy={copyKey} onCode={digits} onTogglePasskey={togglePasskey} onTogglePasskeyInfo={() => setPasskeyInfo((v) => !v)} onSignInAgain={signInAgain} />
     </section>
   );

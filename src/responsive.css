@@ -35,6 +35,8 @@
      full-width button under its text, at least 44px tall for a thumb. */
   .sec-grid { grid-template-columns: 1fr !important; }
   .sec-row > .sec-act, .sec-pw-act { width: 100% !important; margin-left: 0 !important; padding: 12px 18px !important; min-height: 44px !important; }
+  /* Two-step rows are a 3-column grid (icon · text · button): the button takes its own full-width line. */
+  .sec-grid .sec-row > .sec-act { grid-column: 1 / -1; }
   /* The devices list's bottom "Sign out everywhere else" sits in a .r-btnrow
      (full width already): the same 44px height as the row buttons above it. */
   .sec-row .r-btnrow > button { min-height: 44px !important; padding: 12px 18px !important; }

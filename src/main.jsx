@@ -17,10 +17,8 @@ import { LegalPage } from "./auth/LegalPage.jsx";
 import { ProfilePage } from "./auth/ProfilePage.jsx";
 import { AdminDashboard } from "./admin/AdminDashboard.jsx";
 import { Dashboard } from "./dashboard/Dashboard.jsx";
-import { CompleteProfile } from "./auth/CompleteProfile.jsx";
 import { SignUpPage } from "./auth/SignUpPage.jsx";
 import { SecurityNudge } from "./auth/SecurityNudge.jsx";
-import { supabase } from "./lib/supabaseClient";
 import { WORKOS } from "./lib/workos";
 import { applySignupAnswers } from "./lib/signupAnswers";
 
@@ -245,45 +243,26 @@ function isSignup() {
   try { return new URLSearchParams(window.location.search).has("signup"); } catch { return false; }
 }
 
-// WorkOS sign-in only, and rare now that the sign-up page asks everything: a
-// new reader who came in through "Sign in" on the WorkOS page (Google there,
-// say) never saw the sign-up page, so the same questions are asked once
-// (CompleteProfile.jsx) until the profile has an industry. Answers already on
-// the account (user_metadata, kept by the sign-up page) are copied to the
-// profile instead of being asked again. Legal pages, unsubscribe links and
-// the sign-up page itself (it saves its own answers) stay clear of it.
+// Nobody is asked anything after signing in (owner, 2026-10-27): the sign-up
+// page is the one place for name, job title, company and industry. Answers
+// already on the account (user_metadata, kept by the sign-up page) are copied
+// to an empty profile here, silently. An account with no answers at all (made
+// before the sign-up page, or through "Sign in" with Google on the WorkOS
+// page) simply opens the dashboard; the dashboard and the Profile page offer
+// the industry and the details, never as a blocking step.
 function ProfileStep() {
-  const { user, profile, loading, saveProfileBasics, refreshProfile, signOut } = useAuth();
+  const { user, profile, loading, refreshProfile } = useAuth();
   const meta = user?.user_metadata || {};
-  const missing = WORKOS && !loading && !!user && !!profile && !profile.industry && (() => {
-    try { const q = new URLSearchParams(window.location.search); return !q.has("legal") && !q.has("unsubscribe") && !q.has("signup"); }
-    catch { return true; }
-  })();
-  // "idle" -> "repairing" (copying the account's answers) -> "done" | "failed" (ask).
-  const [repair, setRepair] = useState("idle");
-  const canRepair = missing && !!meta.industry && repair !== "failed";
+  const canRepair = WORKOS && !loading && !!user && !!profile && !profile.industry && !!meta.industry;
+  const [tried, setTried] = useState(false);
   useEffect(() => {
-    if (!canRepair || repair !== "idle") return;
-    setRepair("repairing");
+    if (!canRepair || tried) return;
+    setTried(true);
     applySignupAnswers(user, { full_name: meta.full_name, role: meta.job_title, company: meta.company, industry: meta.industry })
-      .then(async (r) => { const fresh = r?.ok ? await refreshProfile() : null; setRepair(fresh?.industry ? "done" : "failed"); })
-      .catch(() => setRepair("failed"));
-  }, [canRepair, repair]); // eslint-disable-line react-hooks/exhaustive-deps
-  if (!missing || canRepair) return null;
-  async function save(fields, consent) {
-    try { await supabase.auth.updateUser({ data: { marketing_opt_in: !!consent } }); }
-    catch (e) { console.warn("[Profile] opt-in not saved:", e?.message || e); }
-    // onboarded_at NULL -> set sends the welcome email (trg_welcome_on_onboarded).
-    const r = await saveProfileBasics({ ...fields, ...(profile.onboarded_at ? {} : { onboarded_at: new Date().toISOString() }) });
-    if (r?.error) return { error: r.error };
-    if (!r?.profile?.industry) return { error: "Could not save. Try again." };
-    return { ok: true };
-  }
-  return (
-    <CompleteProfile email={user.email} profile={profile}
-      nameHint={{ first_name: meta.first_name, last_name: meta.last_name, full_name: meta.full_name || meta.name }}
-      onSave={save} onSignOut={async () => { await signOut(); window.location.href = "/"; }} />
-  );
+      .then((r) => (r?.ok ? refreshProfile() : null))
+      .catch(() => { /* the dashboard still opens; Profile can fill it */ });
+  }, [canRepair, tried]); // eslint-disable-line react-hooks/exhaustive-deps
+  return null;
 }
 
 // ?signin_error=<reason>: a WorkOS sign-in trip that could not finish lands on
