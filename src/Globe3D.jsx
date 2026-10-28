@@ -33,6 +33,12 @@ const CORE_PX = { 5: 18, 4: 16, 3: 14, 2: 12, 1: 12 };
 const HALO_PX = 2.6;       // halo diameter = core × this
 // Points keep a readable size from the whole-globe view down to city level.
 const markerScale = (Cesium) => new Cesium.NearFarScalar(1.5e6, 1.15, 4.0e7, 1.0);
+// Points are depth-tested against the globe, but a dot just past the horizon
+// lands partly outside the globe's disc, where there is only sky to test
+// against, so half of it showed against space at the edge of the globe. Each
+// marker therefore asks the horizon test (viewer._horizon, refreshed on every
+// preRender in 3D; null in 2D and while morphing, where everything shows).
+const onNearSide = (viewer, position) => { const h = viewer._horizon; return !h || h.isPointVisible(position); };
 
 // Longitude roughly under the user's local timezone (UTC offset × 15°/hour).
 // The globe opens over the user's part of the world, so its day/night state
@@ -721,16 +727,18 @@ function resolveCoords(inc) {
       const color = Cesium.Color.fromCssColorString(hex);
       const core = CORE_PX[inc.severity] || CORE_PX[3];
       const position = Cesium.Cartesian3.fromDegrees(lng, lat);
+      const show = new Cesium.CallbackProperty(() => onNearSide(viewer, position), false);
       // Halo first so the core draws over it; clicks on it still open the incident.
       const halo = viewer.entities.add({
         position,
-        point: { pixelSize: core * HALO_PX, color: color.withAlpha(0.28), outlineWidth: 0, scaleByDistance: markerScale(Cesium) },
+        point: { show, pixelSize: core * HALO_PX, color: color.withAlpha(0.28), outlineWidth: 0, scaleByDistance: markerScale(Cesium) },
       });
       halo._incident = inc;
       const entity = viewer.entities.add({
         id: String(inc._id),
         position,
         point: {
+          show,
           pixelSize: core,
           color,
           outlineColor: Cesium.Color.WHITE.withAlpha(0.95),
@@ -751,6 +759,7 @@ function resolveCoords(inc) {
         const pulse = viewer.entities.add({
           position,
           point: {
+            show,
             pixelSize: new Cesium.CallbackProperty(() => core * (1.2 + phase() * 2.6), false),
             color: Cesium.Color.TRANSPARENT,
             outlineColor: new Cesium.CallbackProperty(() => color.withAlpha(0.8 * (1 - phase())), false),
@@ -868,7 +877,13 @@ function resolveCoords(inc) {
       // The flat map can never leave the frame: re-check the 2D camera before
       // every render (no-op in 3D).
       viewer._clamp2DHandler = viewer.scene.preRender.addEventListener(() => {
-        if (!viewer.isDestroyed()) clamp2D(viewer);
+        if (viewer.isDestroyed()) return;
+        clamp2D(viewer);
+        // The horizon test for the markers (onNearSide), from this frame's camera.
+        if (viewer.scene.mode === Cesium.SceneMode.SCENE3D) {
+          if (!viewer._horizon) viewer._horizon = new Cesium.EllipsoidalOccluder(Cesium.Ellipsoid.WGS84, viewer.camera.positionWC);
+          else viewer._horizon.cameraPosition = viewer.camera.positionWC;
+        } else viewer._horizon = null;
       });
 
       // ── Auto-rotation: rotate globe slowly when user is idle ─────────────

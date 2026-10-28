@@ -143,6 +143,7 @@ export function SecurityPanel() {
   const confirm = (e) => { e.preventDefault(); run("confirm", async () => {
     await securityApi("/totp/confirm", { setup: setup.setup, code });
     setStatus((s) => ({ ...s, totp: { ...(s && s.totp), on: true, since: new Date().toISOString() } }));
+    trigger.current = "sec-totp-btn";   // the Okta row has no button once two-step is on
     setStep("idle"); setSetup(null); setCode("");
     setMsg({ ok: true, text: "Two-step verification is on. Next time you sign in on the Attacked.ai sign-in page, it will ask for a code from your app." });
     load();

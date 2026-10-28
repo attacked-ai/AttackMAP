@@ -143,7 +143,7 @@ function ArtCanvas({ points, className }) {
 }
 
 // ── views ──────────────────────────────────────────────────────────────────
-function YourIndustry({ P, name, subscriber, query, onOpen, onSubscribe, go, needsIndustry, onPickIndustry }) {
+function YourIndustry({ P, name, subscriber, query, onOpen, onSubscribe, go, needsIndustry, onPickIndustry, canEdit, pickKey }) {
   const [filter, setFilter] = useState("all");
   useEffect(() => { setFilter("all"); }, [P.industry]);
   const h = new Date().getHours();
@@ -167,7 +167,7 @@ function YourIndustry({ P, name, subscriber, query, onOpen, onSubscribe, go, nee
         <div className="mast-copy">
           <div className="mast-eyebrow">
             <span className="live" />
-            <span>Your industry</span>
+            <span>{needsIndustry ? "Example industry" : "Your industry"}</span>
             <span className="sep">·</span>
             <span>{P.industry}</span>
             <span className="sep">·</span>
@@ -181,7 +181,7 @@ function YourIndustry({ P, name, subscriber, query, onOpen, onSubscribe, go, nee
               <span>·</span>
               <span>{subscriber ? "Blast radius, GUARD controls and peer watchlist unlocked" : "Every incident in your industry, classified"}</span>
             </div>
-            <a className="mast-link" href="/?profile#work">Change industry →</a>
+            {canEdit && !needsIndustry && <a className="mast-link" href="/?profile#work">Change industry →</a>}
           </div>
         </div>
         <div className="mast-art" aria-hidden="true"
@@ -198,7 +198,7 @@ function YourIndustry({ P, name, subscriber, query, onOpen, onSubscribe, go, nee
             <h2 id="pick-industry-h">Make this dashboard yours</h2>
             <p>You're seeing {P.industry} as an example. Choose your industry and every card, figure and brief here follows it. You can change it any time in your profile.</p>
           </div>
-          <select defaultValue="" aria-label="Your industry" onChange={(e) => { if (e.target.value) onPickIndustry(e.target.value); }}>
+          <select key={pickKey} defaultValue="" aria-label="Your industry" onChange={(e) => { if (e.target.value) onPickIndustry(e.target.value); }}>
             <option value="" disabled>Choose your industry</option>
             {SECTORS.map(([s, list]) => <optgroup key={s} label={s}>{list.map((x) => <option key={x} value={x}>{x}</option>)}</optgroup>)}
           </select>
@@ -209,7 +209,7 @@ function YourIndustry({ P, name, subscriber, query, onOpen, onSubscribe, go, nee
         <div className="kpi"><Icon name="pulse" /><div><b className="num">{P.week}</b><span>this week</span></div></div>
         <div className="kpi"><Icon name="bell" /><div><b className="num">{P.critical}</b><span>High or Critical</span></div></div>
         <div className="kpi"><Icon name="database" /><div><b className="num">{P.total}</b><span>in your archive</span></div></div>
-        <div className="kpi"><Icon name="bars" /><div><b>{top ? top.name : "—"}</b><span>hardest-hit category</span></div></div>
+        <div className="kpi"><Icon name="bars" /><div><b title={top ? top.name : undefined}>{top ? top.name : "—"}</b><span>hardest-hit category</span></div></div>
         <a className="kpi kpi-map" href="/?map" target="_blank" rel="noopener"><Icon name="globe" /><div><b>Live Attack Map</b><span>every incident, geolocated</span></div><span className="kpi-go">→</span></a>
       </section>
 
@@ -277,7 +277,9 @@ function YourIndustry({ P, name, subscriber, query, onOpen, onSubscribe, go, nee
               : <div className="empty" style={{ textAlign: "center" }}>No long-form briefings yet for this industry. The incident cards above are live.</div>}</div>
           </section>
         </div>
-        <div className="sector-note">Everything on this page is live data from the Attacked.ai corpus, filtered to the industry you gave us at sign-up. Tell us if it should change and we will move it.</div>
+        <div className="sector-note">{needsIndustry
+          ? <>Everything on this page is live data from the Attacked.ai corpus, shown here for an example industry. Choose yours at the top of the page and it all follows.</>
+          : <>Everything on this page is live data from the Attacked.ai corpus, filtered to the industry you gave us at sign-up. Change it any time in your profile.</>}</div>
       </section>
     </div>
   );
@@ -472,14 +474,22 @@ export function Dashboard({ initialPage = "dashboard" }) {
   // "Sign in" with Google): the dashboard still opens, on an example
   // industry, with a "Make this dashboard yours" picker on top. Nobody is
   // stopped by a question after signing in (owner, 2026-10-27).
-  const needsIndustry = !preview && !authLoading && !!user && !!profile && !profile.industry && !metaIndustry;
+  // (Also when the profile row could not be read at all: the page must never
+  // sit on "Loading your dashboard…".)
+  const needsIndustry = !preview && !authLoading && !!user && !profile?.industry && !metaIndustry;
   useEffect(() => { if (needsIndustry && !industry) setIndustry(DEFAULT_INDUSTRY); }, [needsIndustry, industry]);
   const [picked, setPicked] = useState(false);
+  const [pickKey, setPickKey] = useState(0);   // remounts the picker's select after a failed save
   const pickIndustry = useCallback(async (v) => {
     setPicked(true); setIndustry(v);
     // The first industry stamps onboarded_at, which sends the welcome email (as the sign-up page does).
-    await saveProfileBasics({ industry: v, ...(profile && !profile.onboarded_at ? { onboarded_at: new Date().toISOString() } : {}) });
-  }, [saveProfileBasics, profile]);
+    const r = await saveProfileBasics({ industry: v, ...(!profile?.onboarded_at ? { onboarded_at: new Date().toISOString() } : {}) });
+    if (r?.error) {
+      // Not saved: back to the example and the picker, and say so.
+      setPicked(false); setIndustry(DEFAULT_INDUSTRY); setPickKey((k) => k + 1);
+      toast("Could not save your industry. Please try again.");
+    }
+  }, [saveProfileBasics, profile]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { const want = profile?.industry || metaIndustry; if (want && want !== industry) setIndustry(want); }, [profile?.industry, metaIndustry]); // eslint-disable-line
   // Profile row without an industry but sign-up details with one: repair the row once.
   useEffect(() => { if (user && profile && !profile.industry && metaIndustry) saveProfileBasics({ industry: metaIndustry }); }, [user, profile?.industry, metaIndustry]); // eslint-disable-line
@@ -558,7 +568,7 @@ export function Dashboard({ initialPage = "dashboard" }) {
 
           {err && <div className="content"><div className="panel empty" style={{ color: "#B21F31" }}>{err}</div></div>}
           {!P && !err && <div className="content"><div className="panel empty mono">{industry ? `Loading ${industry}…` : "Loading your dashboard…"}</div></div>}
-          {P && page === "dashboard" && <YourIndustry P={P} name={name} subscriber={subscriber} query={query} onOpen={openArticle} onSubscribe={() => openSubscribe()} go={go} needsIndustry={needsIndustry && !picked} onPickIndustry={pickIndustry} />}
+          {P && page === "dashboard" && <YourIndustry P={P} name={name} subscriber={subscriber} query={query} onOpen={openArticle} onSubscribe={() => openSubscribe()} go={go} needsIndustry={needsIndustry && !picked} onPickIndustry={pickIndustry} canEdit={!!user && !preview} pickKey={pickKey} />}
           {P && page === "article" && article && <ArticleView key={`${article.id}-${reportsReady}`} readerName={profile?.full_name || user?.email || ""} reader={readerLicence(profile, user, subscriber)} i={article} subscriber={subscriber} back={() => go(lastPage)} backLabel="Back to your industry" onSubscribe={() => openSubscribe()} />}
         </main>
       </div>
@@ -567,7 +577,7 @@ export function Dashboard({ initialPage = "dashboard" }) {
       {menu && (
         <div className="profile-menu open" style={{ top: navH + 54 }}>
           <a href="/?profile">Profile</a>
-          <a href="/?profile#security">Login and security</a>
+          {user && <a href="/?profile#security">Login and security</a>}
           {subscriber && user && tier !== "admin" && <button onClick={async () => { try { await setSubscribed(false); toast("Subscription switched off."); } catch (e) { console.error("[dashboard] switching off the subscription failed:", e); toast("Could not switch off the subscription. Please try again."); } setMenu(false); }}>Switch off subscription</button>}
           {!subscriber && <button onClick={() => { setMenu(false); openSubscribe(); }}>Subscribe</button>}
           <a href="/?home">Landing page</a>

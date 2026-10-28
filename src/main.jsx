@@ -253,7 +253,11 @@ function isSignup() {
 function ProfileStep() {
   const { user, profile, loading, refreshProfile } = useAuth();
   const meta = user?.user_metadata || {};
-  const canRepair = WORKOS && !loading && !!user && !!profile && !profile.industry && !!meta.industry;
+  const quiet = (() => {   // the sign-up page saves its own answers; legal and unsubscribe links stay clear
+    try { const q = new URLSearchParams(window.location.search); return q.has("signup") || q.has("legal") || q.has("unsubscribe"); }
+    catch { return false; }
+  })();
+  const canRepair = WORKOS && !quiet && !loading && !!user && !!profile && !profile.industry && !!meta.industry;
   const [tried, setTried] = useState(false);
   useEffect(() => {
     if (!canRepair || tried) return;

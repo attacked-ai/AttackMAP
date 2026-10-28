@@ -1,8 +1,8 @@
 // ─────────────────────────────────────────────────────────────────────────
 // TwoStepCard — the "Two-step verification" card of Profile › Login and
-// security: a grid of three method rows (Passkey first, then Okta Verify and
+// security: a list of three method rows (Passkey first, then Okta Verify and
 // the Authenticator app, MongoDB's order), the expanded flow under it (passkey explainer, set-up form, turn-off
-// form), three footnotes, the live status line and the admin reminder.
+// form), four footnotes, the live status line and the admin reminder.
 // Nothing is forced: every row only offers "Set up". State and handlers
 // live in SecurityPanel.jsx.
 // ─────────────────────────────────────────────────────────────────────────
@@ -30,8 +30,8 @@ function MethodRow({ icon, name, pillEl, text, info, action, note }) {
         </div>
         <div style={{ ...helper, marginTop: 2 }}>{text}</div>
       </div>
+      {note && <div id="passkey-note" style={{ ...helper, gridColumn: "2 / -1", gridRow: 2 }}>{note}</div>}
       {action || <span />}
-      {note && <div id="passkey-note" style={{ ...helper, gridColumn: "2 / -1" }}>{note}</div>}
     </div>
   );
 }
@@ -43,8 +43,9 @@ export function TwoStepCard({
   const method = status ? status.method : null;
   const since = status && status.totp ? status.totp.since : null;
   // id: the panel returns focus to this button when its form or panel closes.
-  const act = (id, primary, disabled, onClick, label, danger) => (
-    <button type="button" id={id} className="sec-act" disabled={disabled} title={disabled && bridgeOff ? disabledTitle : undefined} onClick={onClick}
+  // aria: every row's button says which method it is for ("Set up" alone, three times, tells a screen reader nothing).
+  const act = (id, primary, disabled, onClick, label, danger, aria) => (
+    <button type="button" id={id} className="sec-act" aria-label={aria} disabled={disabled} title={disabled && bridgeOff ? disabledTitle : undefined} onClick={onClick}
       style={{ ...btn(primary, disabled), marginLeft: "auto", flex: "0 0 auto", ...(danger ? { color: C.err, borderColor: C.err } : {}) }}>{label}</button>
   );
 
@@ -62,18 +63,18 @@ export function TwoStepCard({
           info={<button type="button" className="sec-info" aria-label="About passkeys" aria-expanded={passkeyInfo} aria-controls="passkey-note" style={infoBtn(passkeyInfo)} onClick={onTogglePasskeyInfo}><Icon name="info" /></button>}
           pillEl={status ? (method === "Passkey" ? <span style={pill(true)}>Used last time</span> : <span style={recPill}>Recommended</span>) : null}
           text={loading ? "Checking…" : "Your fingerprint, face, phone or security key. Can't be phished, and it covers both steps on its own."}
-          action={!loading && act("sec-passkey-btn", false, !!busy || bridgeOff, onTogglePasskey, step === "passkeyHelp" ? "Close" : "Set up")}
+          action={!loading && act("sec-passkey-btn", false, !!busy || bridgeOff, onTogglePasskey, step === "passkeyHelp" ? "Close" : "Set up", false, step === "passkeyHelp" ? "Close passkey help" : "Set up a passkey")}
           note={passkeyInfo ? "Works on recent phones, laptops and browsers. A passkey saved on one device isn't automatically on another." : null} />
 
         {/* Row B — Okta Verify. WorkOS can't send Okta's "approve" push, but
             Okta Verify also holds 6-digit codes for other accounts, so it
             uses the same code set-up as the authenticator app row. */}
         <MethodRow icon="okta" name="Okta Verify Mobile App"
-          pillEl={status ? (on ? <span style={pill(true)}>Code on</span> : <span style={recPill}>Recommended</span>) : null}
+          pillEl={status ? (on ? <span style={pill(false)}>Uses your code</span> : <span style={recPill}>Recommended</span>) : null}
           text={loading ? "Checking…" : on
             ? "Two-step codes are on. They can live in Okta Verify or any authenticator app; turn them off on the Authenticator app row."
             : "Use the Okta Verify app on your phone for the 6-digit sign-in code: tap +, choose Other, and scan our QR code."}
-          action={!loading && !on && act("sec-okta-btn", false, !!busy || bridgeOff || step === "setup", onStartOkta, busy === "start" && app === "okta" ? "Starting…" : "Set up")} />
+          action={!loading && !on && act("sec-okta-btn", false, !!busy || bridgeOff || step === "setup", onStartOkta, busy === "start" && app === "okta" ? "Starting…" : "Set up", false, "Set up Okta Verify")} />
 
         {/* Row C — Authenticator app */}
         <MethodRow icon="phone" name="Authenticator app"
@@ -82,8 +83,8 @@ export function TwoStepCard({
             ? `${since && fmtDate(since) ? `On since ${fmtDate(since)}. ` : ""}The Attacked.ai sign-in page asks for the code.`
             : "A 6-digit code from Google Authenticator, Microsoft Authenticator, 1Password or similar."}
           action={!loading && (on
-            ? act("sec-totp-btn", false, !!busy || bridgeOff || step === "remove", onOpenRemove, "Turn off", true)
-            : act("sec-totp-btn", true, !!busy || bridgeOff || step === "setup", onStart, busy === "start" && app !== "okta" ? "Starting…" : "Set up"))} />
+            ? act("sec-totp-btn", false, !!busy || bridgeOff || step === "remove", onOpenRemove, "Turn off", true, "Turn off two-step verification")
+            : act("sec-totp-btn", true, !!busy || bridgeOff || step === "setup", onStart, busy === "start" && app !== "okta" ? "Starting…" : "Set up", false, "Set up an authenticator app"))} />
       </div>
 
       {/* Passkey explainer */}
@@ -107,7 +108,7 @@ export function TwoStepCard({
       {step === "setup" && setup && (
         <form onSubmit={onConfirm} style={flowBox}>
           <p ref={flowRef} tabIndex={-1} style={{ ...p, fontWeight: 600, color: C.ink, outline: "none" }}>{app === "okta"
-            ? "1. In Okta Verify, tap + (Add account), choose Other, then scan this code."
+            ? `1. In Okta Verify, tap + (Add account), choose Other, then ${setup.qr ? "scan this code" : "enter the key below"}.`
             : "1. Add Attacked.ai to your authenticator app."}</p>
           <div style={{ display: "flex", gap: 22, flexWrap: "wrap", alignItems: "center", marginBottom: 14 }}>
             {setup.qr && <img src={setup.qr} alt="QR code that adds Attacked.ai to an authenticator app" width={168} height={168} style={{ border: `1px solid ${C.line}`, borderRadius: 8, background: "#fff", maxWidth: "100%" }} />}

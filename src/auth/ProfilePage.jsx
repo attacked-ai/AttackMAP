@@ -101,15 +101,22 @@ export function ProfilePage() {
   const [avatarErr, setAvatarErr] = useState(null);
   const [active, setActive] = useState("details");
   const fileRef = useRef(null);
+  // Fields the reader has typed in and not saved yet. A save in one section
+  // refreshes the profile, and the refresh must not overwrite what is being
+  // typed in another section.
+  const touched = useRef({});
+  const edit = (key, set) => (e) => { touched.current[key] = true; set(e.target.value); };
 
-  // Hydrate the forms from the profile / the sign-up answers once they resolve.
+  // Hydrate the forms from the profile / the sign-up answers once they resolve
+  // (and after each save), leaving fields with unsaved edits alone.
   useEffect(() => {
     if (!user) return;
-    setFullName(profile?.full_name || meta.full_name || [meta.first_name, meta.last_name].filter(Boolean).join(" ") || "");
-    setCountry(profile?.country || meta.country || "");
-    setJobTitle(profile?.role || meta.job_title || "");
-    setCompany(profile?.company || meta.company || "");
-    setIndustry(profile?.industry || meta.industry || "");
+    const t = touched.current;
+    if (!t.fullName) setFullName(profile?.full_name || meta.full_name || [meta.first_name, meta.last_name].filter(Boolean).join(" ") || "");
+    if (!t.country) setCountry(profile?.country || meta.country || "");
+    if (!t.jobTitle) setJobTitle(profile?.role || meta.job_title || "");
+    if (!t.company) setCompany(profile?.company || meta.company || "");
+    if (!t.industry) setIndustry(profile?.industry || meta.industry || "");
   }, [profile, user]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Anonymous visitors don't have a profile — send them home once auth resolves.
@@ -141,16 +148,19 @@ export function ProfilePage() {
 
   if (loading || !user) return null;
 
-  async function persist(section, fields) {
+  async function persist(section, fields, keys = []) {
     setBusy(section); setState((s) => ({ ...s, [section]: null }));
-    const stamp = fields.industry && !profile?.onboarded_at ? { onboarded_at: new Date().toISOString() } : {};
+    // Only the save that gives the profile its FIRST industry stamps onboarded_at
+    // (= welcome email); a later company or job-title change never does.
+    const stamp = fields.industry && !profile?.industry && !profile?.onboarded_at ? { onboarded_at: new Date().toISOString() } : {};
     const r = await saveProfileBasics({ ...fields, ...stamp });
     setBusy(null);
+    if (!r?.error) keys.forEach((k) => { delete touched.current[k]; });   // saved: follow the profile again
     setState((s) => ({ ...s, [section]: r?.error ? "error" : "saved" }));
     if (!r?.error) setTimeout(() => setState((s) => ({ ...s, [section]: null })), 2600);
   }
-  const saveDetails = (e) => { e.preventDefault(); persist("details", { full_name: fullName.trim() || null, country: country || null }); };
-  const saveWork = (e) => { e.preventDefault(); persist("work", { role: jobTitle || null, company: company.trim() || null, ...(industry ? { industry } : {}) }); };
+  const saveDetails = (e) => { e.preventDefault(); persist("details", { full_name: fullName.trim() || null, country: country || null }, ["fullName", "country"]); };
+  const saveWork = (e) => { e.preventDefault(); persist("work", { role: jobTitle || null, company: company.trim() || null, ...(industry ? { industry } : {}) }, ["jobTitle", "company", "industry"]); };
   const subscribed = profile?.email_subscribed !== false;
   const toggleEmail = () => persist("email", { email_subscribed: !subscribed });
 
@@ -171,7 +181,8 @@ export function ProfilePage() {
   const subscriber = isSubscriber(tier);
   const jump = (id) => (e) => { e.preventDefault(); setActive(id); document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" }); };
 
-  const Photo = ({ size }) => (
+  // A plain render helper (not a component), so the photo buttons keep their DOM node and focus between renders.
+  const photo = (size) => (
     <button type="button" className="pf-avatar" style={{ width: size, height: size }} onClick={() => fileRef.current && fileRef.current.click()} disabled={avatarBusy} title="Change photo" aria-label="Change profile photo">
       {avatarUrl ? <img src={avatarUrl} alt="" /> : <span style={{ fontSize: size * 0.42 }}>{initial}</span>}
       {avatarBusy && <span className="pf-avatar-busy">…</span>}
@@ -187,7 +198,7 @@ export function ProfilePage() {
       {/* Header — dark band */}
       <section className="pf-hero">
         <div className="pf-wrap pf-hero-in">
-          <Photo size={88} />
+          {photo(88)}
           <div className="pf-hero-copy">
             <div className="pf-eyebrow">Your profile</div>
             <h1>{fullName || "Your account"}</h1>
@@ -232,7 +243,7 @@ export function ProfilePage() {
           <Section id="details" title="Personal details" text="How you appear on Attacked.ai and on your licensed reports.">
             <form onSubmit={saveDetails}>
               <div className="pf-photo-row">
-                <Photo size={56} />
+                {photo(56)}
                 <div>
                   <b>Profile photo</b>
                   <span>JPG or PNG, under 5 MB.</span>
@@ -241,17 +252,17 @@ export function ProfilePage() {
               </div>
               <div className="pf-grid">
                 <label className="pf-field"><span>Full name</span>
-                  <input type="text" value={fullName} placeholder="Your name" autoComplete="name" onChange={(e) => setFullName(e.target.value)} />
+                  <input type="text" value={fullName} placeholder="Your name" autoComplete="name" onChange={edit("fullName", setFullName)} />
                 </label>
                 <label className="pf-field"><span>Country</span>
-                  <select value={country} onChange={(e) => setCountry(e.target.value)} className={country ? "" : "empty"}>
+                  <select value={country} onChange={edit("country", setCountry)} className={country ? "" : "empty"}>
                     <option value="">Select country</option>
                     {COUNTRIES.map((c) => <option key={c} value={c}>{c}</option>)}
                   </select>
                 </label>
                 <label className="pf-field pf-span"><span>Email</span>
                   <input type="email" value={user.email || ""} readOnly aria-readonly="true" className="ro" />
-                  <small>Change it under Login and security.</small>
+                  <small>This is the address you sign in with. To change it, contact the Attacked.ai team.</small>
                 </label>
               </div>
               <SaveRow busy={busy === "details"} state={state.details} />
@@ -262,16 +273,16 @@ export function ProfilePage() {
             <form onSubmit={saveWork}>
               <div className="pf-grid">
                 <label className="pf-field"><span>Job title</span>
-                  <select value={jobTitle} onChange={(e) => setJobTitle(e.target.value)} className={jobTitle ? "" : "empty"}>
+                  <select value={jobTitle} onChange={edit("jobTitle", setJobTitle)} className={jobTitle ? "" : "empty"}>
                     <option value="">Select your job title</option>
                     {[...new Set([...(jobTitle && !ROLES.includes(jobTitle) ? [jobTitle] : []), ...ROLES])].map((j) => <option key={j} value={j}>{j}</option>)}
                   </select>
                 </label>
                 <label className="pf-field"><span>Company</span>
-                  <input type="text" value={company} placeholder="Your organisation" autoComplete="organization" onChange={(e) => setCompany(e.target.value)} />
+                  <input type="text" value={company} placeholder="Your organisation" autoComplete="organization" onChange={edit("company", setCompany)} />
                 </label>
                 <label className="pf-field pf-span"><span>Industry</span>
-                  <select value={industry} onChange={(e) => setIndustry(e.target.value)} className={industry ? "" : "empty"}>
+                  <select value={industry} onChange={edit("industry", setIndustry)} className={industry ? "" : "empty"}>
                     <option value="">Select your industry</option>
                     {SECTORS.map(([s, list]) => <optgroup key={s} label={s}>{list.map((i) => <option key={i} value={i}>{i}</option>)}</optgroup>)}
                   </select>

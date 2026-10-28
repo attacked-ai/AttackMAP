@@ -480,9 +480,9 @@
    yours" industry picker for accounts without an industry. */
 .dash .app { grid-template-columns: minmax(0, 1fr); }
 .dash .main { grid-column: 1; }
-.dash .topbar { padding: 0 max(28px, calc((100% - 1600px) / 2 + 28px)); }
+.dash .topbar { padding: 0 max(28px, calc((100% - 1440px) / 2 + 28px)); }
 .dash .content { max-width: 1440px; }
-.dash .mast-link { margin-top: 14px; align-self: flex-start; font-size: 12.5px; font-weight: 600; color: var(--gold); border-bottom: 1px solid rgba(252,189,0,.35); padding-bottom: 1px; }
+.dash .mast-link { font-size: 12.5px; font-weight: 600; color: var(--gold); border-bottom: 1px solid rgba(252,189,0,.35); padding-bottom: 1px; }
 .dash .mast-link:hover { border-bottom-color: var(--gold); }
 
 .dash .pick-industry { display: flex; align-items: center; gap: 18px 24px; flex-wrap: wrap; margin-bottom: 16px; padding: 18px 22px; background: #FFF7DE; border: 1px solid #F1DE9C; border-left: 4px solid var(--gold); border-radius: var(--r-md); }
@@ -528,6 +528,8 @@
 }
 @media (max-width: 760px) {
   .dash .topbar { padding: 0 12px; }
+  /* Long category names wrap (two lines at most) instead of being cut. */
+  .dash .kpi b:not(.num) { white-space: normal; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
   .dash .kpi { padding: 14px; gap: 10px; }
   .dash .kpi b { font-size: 19px; }
   .dash .kpi > .icon { width: 32px; height: 32px; flex-basis: 32px; }

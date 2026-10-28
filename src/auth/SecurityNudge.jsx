@@ -26,7 +26,14 @@ const QUIET_PARAMS = ["profile", "admin", "map", "legal", "unsubscribe", "subscr
 
 const read = (key) => { try { return JSON.parse(window.localStorage.getItem(key) || "null"); } catch { return null; } };
 const write = (key, v) => { try { window.localStorage.setItem(key, JSON.stringify(v)); } catch { /* private mode: asks again next load */ } };
-const signInId = (user) => String(user?.last_sign_in_at || user?.app_metadata?.signed_in_at || "");
+// The sign-in this session belongs to. The same sign-in arrives with
+// nanosecond precision from /verify and microseconds after a token refresh
+// ("…05.062487829Z" vs "…05.062487Z"), so it is compared as milliseconds.
+// "-" when neither stamp exists: one shared key, so "Remind me later" still sticks.
+const signInId = (user) => {
+  const t = Date.parse(user?.last_sign_in_at || user?.app_metadata?.signed_in_at || "");
+  return Number.isFinite(t) ? String(t) : "-";
+};
 
 // May the screen be considered on this page load? (The bridge is asked after.)
 export function nudgeAllowed({ user, search, handled }) {
@@ -36,8 +43,7 @@ export function nudgeAllowed({ user, search, handled }) {
   let q;
   try { q = new URLSearchParams(search || ""); } catch { return false; }
   if (QUIET_PARAMS.some((p) => q.has(p))) return false;
-  const id = signInId(user);
-  if (id && handled === id) return false;                            // this sign-in was already asked
+  if (handled != null && handled === signInId(user)) return false;   // this sign-in was already asked
   return true;
 }
 // What the bridge said → still worth asking?
@@ -74,7 +80,11 @@ export function SecurityNudgeFor({ user, loading }) {
   return (
     <SecurityPromptScreen email={user.email}
       onSetup={() => { handle(); window.location.href = "/?profile#security"; }}
-      onLater={() => { handle(); setShow(false); }} />
+      onLater={() => {
+        handle(); setShow(false);
+        // Back on the page: focus its main heading (or the first link), never <body>.
+        setTimeout(() => { const h = document.querySelector("main h1, main h2, h1, a[href]"); if (h) { if (!h.hasAttribute("tabindex") && !/^(A|BUTTON)$/.test(h.tagName)) h.setAttribute("tabindex", "-1"); h.focus({ preventScroll: true }); } }, 0);
+      }} />
   );
 }
 
@@ -100,22 +110,34 @@ const METHODS = [
 
 export function SecurityPromptScreen({ email, onSetup, onLater }) {
   const setupRef = useRef(null);
+  const boxRef = useRef(null);
   useEffect(() => { try { setupRef.current?.focus({ preventScroll: true }); } catch { /* noop */ } }, []);
+  // A modal screen: Tab and Shift+Tab stay on its two buttons, Esc = "Remind me later".
+  const onKeyDown = (e) => {
+    if (e.key === "Escape") { e.preventDefault(); onLater(); return; }
+    if (e.key !== "Tab") return;
+    const f = [...(boxRef.current?.querySelectorAll("button, a[href]") || [])];
+    if (!f.length) return;
+    const i = f.indexOf(document.activeElement);
+    if (e.shiftKey && i <= 0) { e.preventDefault(); f[f.length - 1].focus(); }
+    else if (!e.shiftKey && (i === -1 || i === f.length - 1)) { e.preventDefault(); f[0].focus(); }
+  };
   return (
-    <div role="dialog" aria-modal="true" aria-labelledby="sec-prompt-h" className="sec-prompt" style={{
+    <div ref={boxRef} onKeyDown={onKeyDown} role="dialog" aria-modal="true" aria-labelledby="sec-prompt-h" className="sec-prompt" style={{
       position: "fixed", inset: 0, zIndex: 9000, display: "flex", background: C.paper, color: C.ink,
       fontFamily: "Inter, sans-serif", WebkitFontSmoothing: "antialiased", overflowY: "auto",
     }}>
       <style>{`
-        .sec-prompt-side{flex:0 0 38%;max-width:520px}
+        .sec-prompt-side{flex:0 0 38%;max-width:520px;display:flex;flex-direction:column;justify-content:space-between}
         @media (max-width:820px){.sec-prompt-side{display:none}}
         .sec-prompt a:focus-visible,.sec-prompt button:focus-visible{outline:2px solid ${C.gold};outline-offset:2px}
       `}</style>
-      {/* Brand side — dark, like the WorkOS sign-in panel */}
+      {/* Brand side — dark, like the WorkOS sign-in panel. Its display is set in
+          the <style> above (not inline), so phones can hide it. */}
       <aside className="sec-prompt-side" aria-hidden="true" style={{
         position: "relative", overflow: "hidden", background: C.deep, color: "#fff",
         backgroundImage: `radial-gradient(circle at 30% 78%, rgba(252,189,0,.22), transparent 46%), radial-gradient(circle at 85% 12%, rgba(252,189,0,.10), transparent 40%)`,
-        display: "flex", flexDirection: "column", justifyContent: "space-between", padding: "40px 44px",
+        padding: "40px 44px",
       }}>
         <img src="/attacked-ai-logo.svg" alt="" width="40" height="40" />
         <div style={{ position: "absolute", right: -90, top: "50%", transform: "translateY(-50%)", width: 380, height: 380, borderRadius: "50%", border: "1px solid rgba(252,189,0,.18)" }} />
