@@ -3,8 +3,8 @@
 //
 // Redesigned 2026-10-27 (owner: "properly sectionize all things"). Dark
 // header band (photo, name, email, plan, industry) → light body in two
-// columns: a sticky section menu with an account checklist on the left, and
-// the sections on the right:
+// columns: a sticky section menu on the left (the account checklist that sat
+// under it was removed 2026-10-30, owner), and the sections on the right:
 //   Personal details   name, country, photo
 //   Work and industry  job title, company, industry (the industry leads the
 //                      dashboard and the daily brief; nobody is asked for it
@@ -20,7 +20,7 @@
 // sends the welcome email (trg_welcome_on_onboarded), as the sign-up page does.
 // Anonymous visitors bounce home.
 // ─────────────────────────────────────────────────────────────────────────
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { useAuth } from "./AuthProvider";
 import { SiteNav } from "./SiteNav";
 import { SiteFooter } from "./SiteFooter";
@@ -52,12 +52,18 @@ const ICON = {
   shield: <><path d="M12 3l7 3v5c0 4.5-3 8.3-7 10-4-1.7-7-5.5-7-10V6l7-3z" /><path d="M9 12l2 2 4-4" /></>,
   out: <><path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3" /><path d="M10 17l-5-5 5-5M5 12h11" /></>,
   camera: <><path d="M4 8h3l2-3h6l2 3h3v11H4z" /><circle cx="12" cy="13" r="3.5" /></>,
-  check: <path d="M5 12.5l4.5 4.5L19 7.5" />,
 };
 const Glyph = ({ name, size = 16 }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{ICON[name]}</svg>
 );
 const SECTION_ICON = { details: "user", work: "briefcase", email: "mail", plan: "star", security: "shield", signout: "out" };
+
+// The section named in the URL hash (#work, #plan …), or null. #security is
+// left out: SecurityPanel scrolls to itself.
+const hashSection = () => {
+  const id = (window.location.hash || "").slice(1);
+  return id && id !== "security" && SECTIONS.some(([s]) => s === id) ? id : null;
+};
 
 function Section({ id, title, text, children, aside }) {
   return (
@@ -127,13 +133,33 @@ export function ProfilePage() {
   // /?profile#work (the dashboard's "Change industry") and the other section
   // anchors scroll to their section once the page has drawn. #security is
   // handled by SecurityPanel itself.
+  // Once per page load only: AuthProvider hands over a new user object on every
+  // auth event (a token refresh each time the tab comes back into focus), and
+  // re-running this then pulled a reader who had scrolled on back to #work.
+  // The flag is set when the scroll actually runs, so an auth event inside the
+  // 250 ms wait just restarts the wait instead of losing the scroll.
+  const hashScrolled = useRef(false);
   useEffect(() => {
-    if (loading || !user) return;
-    const id = (window.location.hash || "").slice(1);
-    if (!id || id === "security" || !SECTIONS.some(([s]) => s === id)) return;
-    const t = setTimeout(() => { document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" }); setActive(id); }, 250);
+    if (loading || !user || hashScrolled.current) return;
+    const id = hashSection();
+    if (!id) { hashScrolled.current = true; return; }
+    const t = setTimeout(() => {
+      hashScrolled.current = true;
+      document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" }); setActive(id);
+    }, 250);
     return () => clearTimeout(t);
   }, [loading, user]);
+  // A real hash change later on (back / forward, or a #section link that is
+  // not one of the menu's own) scrolls too.
+  useEffect(() => {
+    const onHash = () => {
+      const id = hashSection();
+      if (!id) return;
+      document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" }); setActive(id);
+    };
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
 
   // The section menu follows the scroll.
   useEffect(() => {
@@ -148,15 +174,6 @@ export function ProfilePage() {
     return () => io.disconnect();
   }, [loading, user]);
 
-  const checklist = useMemo(() => [
-    ["Your name", !!(profile?.full_name)],
-    ["Job title", !!(profile?.role)],
-    ["Company", !!(profile?.company)],
-    ["Industry", !!(profile?.industry)],
-    ["Profile photo", !!(profile?.avatar_url)],
-  ], [profile]);
-  const done = checklist.filter(([, ok]) => ok).length;
-
   if (loading || !user) return null;
 
   async function persist(section, fields, keys = []) {
@@ -166,9 +183,13 @@ export function ProfilePage() {
     const stamp = fields.industry && !profile?.industry && !profile?.onboarded_at ? { onboarded_at: new Date().toISOString() } : {};
     const r = await saveProfileBasics({ ...fields, ...stamp });
     setBusy(null);
-    if (!r?.error) keys.forEach((k) => { delete touched.current[k]; });   // saved: follow the profile again
-    setState((s) => ({ ...s, [section]: r?.error ? "error" : "saved" }));
-    if (!r?.error) setTimeout(() => setState((s) => ({ ...s, [section]: null })), 2600);
+    // An update that matched no row is not an error to Supabase, so
+    // saveProfileBasics comes back with { profile: null } instead. Only a
+    // profile row read back after the save counts as saved.
+    const ok = !r?.error && !!r?.profile;
+    if (ok) keys.forEach((k) => { delete touched.current[k]; });   // saved: follow the profile again
+    setState((s) => ({ ...s, [section]: ok ? "saved" : "error" }));
+    if (ok) setTimeout(() => setState((s) => ({ ...s, [section]: null })), 2600);
   }
   const saveDetails = (e) => { e.preventDefault(); persist("details", { full_name: fullName.trim() || null, country: country || null }, ["fullName", "country"]); };
   const saveWork = (e) => { e.preventDefault(); persist("work", { role: jobTitle || null, company: company.trim() || null, ...(industry ? { industry } : {}) }, ["jobTitle", "company", "industry"]); };
@@ -229,7 +250,7 @@ export function ProfilePage() {
       </section>
 
       <div className="pf-wrap pf-body">
-        {/* Section menu + checklist */}
+        {/* Section menu */}
         <aside className="pf-side">
           <nav className="pf-menu" aria-label="Profile sections">
             {SECTIONS.map(([id, label]) => (
@@ -238,16 +259,6 @@ export function ProfilePage() {
               </a>
             ))}
           </nav>
-          <div className="pf-check">
-            <div className="pf-check-head"><b>Account checklist</b><span>{done} of {checklist.length}</span></div>
-            <div className="pf-meter"><i style={{ width: `${(done / checklist.length) * 100}%` }} /></div>
-            <ul>
-              {checklist.map(([label, ok]) => (
-                <li key={label} className={ok ? "ok" : ""}><span className="pf-tick">{ok ? <Glyph name="check" size={12} /> : null}</span>{label}</li>
-              ))}
-            </ul>
-            {WORKOS && <a href="#security" onClick={jump("security")} className="pf-check-link">Add two-step verification →</a>}
-          </div>
         </aside>
 
         <main className="pf-main">
@@ -325,7 +336,8 @@ export function ProfilePage() {
               <div><span>Industry</span><b>{profile?.industry || "Not set"}</b></div>
             </div>
             <div className="pf-actions">
-              <a className="pf-btn pf-btn-dark" href={subscriber ? "/?subscriptions" : "/?subscribe"}>{subscriber ? "Manage subscription →" : "Subscribe →"}</a>
+              {/* Both go to /?subscribe, the navbar's "Subscription": the plan and its switch-off live there (/?subscriptions only opens the dashboard). */}
+              <a className="pf-btn pf-btn-dark" href="/?subscribe">{subscriber ? "Manage subscription →" : "Subscribe →"}</a>
               <a className="pf-btn pf-btn-ghost-dark" href="/?pricing">Compare plans</a>
             </div>
           </Section>

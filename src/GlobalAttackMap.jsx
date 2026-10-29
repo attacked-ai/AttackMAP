@@ -5263,6 +5263,41 @@ function MapIncidentImage({ incident, height = 150 }) {
   );
 }
 
+// Incident ids that have a full report in the Attacked Hub: the baked files
+// (public/reports/manifest.json byIncident) plus the published CMS reports
+// that name an incident — the same two sources the Hub itself checks. Loaded
+// once per visit, the first time a card opens. A failure only changes the
+// card's link wording to "briefing"; the link itself still works.
+let _hubReportIdsP = null;
+let _hubReportIds = null;   // the resolved set, so a card opened later draws its wording at once
+function _loadHubReportIds() {
+  if (!_hubReportIdsP) {
+    const baked = fetch("/reports/manifest.json")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((m) => Object.keys((m && !Array.isArray(m) && m.byIncident) || {}))
+      .catch(() => []);
+    const cms = Promise.resolve(
+      supabase.from("hub_reports_public").select("incident_id").not("incident_id", "is", null).limit(1000)
+    )
+      .then(({ data }) => (Array.isArray(data) ? data.map((r) => String(r.incident_id)) : []))
+      .catch(() => []);
+    _hubReportIdsP = Promise.all([baked, cms]).then(([a, b]) => (_hubReportIds = new Set([...a, ...b])));
+  }
+  return _hubReportIdsP;
+}
+function useHubHasReport(dbId) {
+  const [has, setHas] = useState(() => !!(dbId && _hubReportIds && _hubReportIds.has(dbId)));
+  useEffect(() => {
+    if (!dbId) { setHas(false); return undefined; }
+    if (_hubReportIds) { setHas(_hubReportIds.has(dbId)); return undefined; }
+    setHas(false);
+    let live = true;
+    _loadHubReportIds().then((ids) => { if (live) setHas(ids.has(dbId)); });
+    return () => { live = false; };
+  }, [dbId]);
+  return has;
+}
+
 // ───── 1. CLASSIFICATION ─────
 function ClassificationBody({ incident, sev, cat }) {
   const stats = useMemo(() => {
@@ -5300,6 +5335,14 @@ function ClassificationBody({ incident, sev, cat }) {
   const [showFullSummary, setShowFullSummary] = useState(false);
   const summaryText = toText(incident.summary) || "";
 
+  // The same incident in the Attacked Hub (/?hub&open=<id> opens its report,
+  // or its briefing when it has no report). Live incidents carry the database
+  // id; the old baked sweeps in public/sweeps/ have none, so no link for them.
+  const dbId = incident.id != null && /^\d+$/.test(String(incident.id)) ? String(incident.id) : null;
+  const hasReport = useHubHasReport(dbId);
+  // "Full" only for subscribers: everyone else gets the report's preview.
+  const tier = useAccess();
+
   return (
     <>
       <div style={{
@@ -5332,6 +5375,35 @@ function ClassificationBody({ incident, sev, cat }) {
             </button>
           )}
         </div>
+      )}
+
+      {/* Straight to this incident in the Hub, same tab. Sits high in the card
+          so it is on screen without scrolling, on the desktop panel and on the
+          phone's first swipe card alike (both render this body). */}
+      {dbId && (
+        <a
+          href={`/?hub&open=${encodeURIComponent(dbId)}`}
+          onClick={() => {
+            // So Back from the Hub lands on this incident again, not on a fresh
+            // map with the tour (the map is not kept in the back-forward cache).
+            try {
+              const q = new URLSearchParams(window.location.search);
+              q.set("incident", dbId); q.delete("date");
+              window.history.replaceState(null, "", `/?${q.toString().replace(/(^|&)map=(?=&|$)/, "$1map")}`);
+            } catch { /* noop */ }
+          }}
+          style={{
+            display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10,
+            minHeight: 40, padding: "8px 14px", marginBottom: 14, boxSizing: "border-box",
+            background: "rgba(252,189,0,0.12)", border: "1px solid rgba(252,189,0,0.4)", borderRadius: 0,
+            color: BRAND.gold, textDecoration: "none", cursor: "pointer",
+            fontFamily: "Inter, sans-serif", fontSize: 11, fontWeight: 700,
+            letterSpacing: "0.08em", textTransform: "uppercase", lineHeight: 1.3,
+          }}
+        >
+          <span>{hasReport ? (tier === "subscriber" ? "Read the full report in Attacked Hub" : "Read the report in Attacked Hub") : "Read the briefing in Attacked Hub"}</span>
+          <span aria-hidden="true" style={{ flexShrink: 0 }}>→</span>
+        </a>
       )}
 
       {/* Render the incident-specific image or clean branded fallback. A
@@ -9292,6 +9364,9 @@ export default function GlobalAttackMap() {
   // ────────────────────────────────────────────────────────────────────
   // chromeTier above is the live auth tier; reuse it here as the access gate.
   const accessTier = isSubscriber(chromeTier) ? "subscriber" : "public";
+  // Which incidents have a Hub report, fetched now so the first card opened
+  // already shows the right link wording (see ClassificationBody).
+  useEffect(() => { _loadHubReportIds(); }, []);
   const [archiveBusy, setArchiveBusy] = useState(false);
   const [archiveToast, setArchiveToast] = useState(null);  // { type, text }
   const [storageSubstrate, setStorageSubstrate] = useState("unknown");  // "persistent" | "session" | "unknown"

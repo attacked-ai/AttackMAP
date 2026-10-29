@@ -53,6 +53,28 @@ const onNearSide = (viewer, p) => {
   return (p.x * _toCam.x + p.y * _toCam.y + p.z * _toCam.z) / (lc * lp) > HORIZON_MARGIN;
 };
 
+// ── Picking through the decorations ─────────────────────────────────────────
+// scene.pick() returns only the front-most object, and once an incident is
+// open several decorations draw OVER the dots: the selection ping (halo + two
+// sonar rings, 11 km up, out to ~275 km), the exact-location disc (4-5 km up),
+// the blast rings and arcs, and the highlighted country/state fill. A click on
+// a nearby dot landed on one of those, fell back to its auto-generated entity
+// GUID and called onSelect(GUID), which matches no incident, so the card
+// closed instead of opening the dot clicked. pickMarkers returns only what can
+// be acted on under the cursor, front to back: incident markers (halo, core
+// and pulse all carry _incident) and blast-radius dots (_blastMeta). The plain
+// pick first keeps the common case (bare globe, or a dot with nothing over it)
+// to one pick pass; drillPick only runs when something else is on top, and the
+// limit keeps a dense stack cheap.
+const DRILL_LIMIT = 10;
+const isMarker = (e) => !!(e && (e._incident || e._blastMeta));
+function pickMarkers(viewer, position) {
+  const top = viewer.scene.pick(position);
+  if (!top) return [];
+  if (top.id && top.id._incident) return [top.id];
+  return viewer.scene.drillPick(position, DRILL_LIMIT).map(p => p && p.id).filter(isMarker);
+}
+
 // Longitude roughly under the user's local timezone (UTC offset × 15°/hour).
 // The globe opens over the user's part of the world, so its day/night state
 // always matches the laptop's local time (day hours → lit, night → dark).
@@ -780,8 +802,8 @@ function resolveCoords(inc) {
             scaleByDistance: markerScale(Cesium),
           },
         });
-        // So a click that lands on the expanding ring still opens the incident
-        // rather than firing onSelect with an auto-generated entity GUID.
+        // So a click or hover that lands on the expanding ring counts as this
+        // incident (pickMarkers skips any entity without _incident/_blastMeta).
         pulse._incident = inc;
       }
     });
@@ -966,17 +988,17 @@ function resolveCoords(inc) {
       // Click a point → open the existing incident card via onSelect(_id).
       const handler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
       handler.setInputAction((movement) => {
-        const picked = viewer.scene.pick(movement.position);
-        if (Cesium.defined(picked) && picked.id) {
-          // Prefer the incident stapled to the entity. The severity-5 pulse
-          // ring is a second entity at the same position with an auto-assigned
-          // GUID, so keying off entity.id alone would fire onSelect with a
-          // GUID that matches no incident whenever the click caught the ring.
-          const inc = picked.id._incident;
-          const id = inc && inc._id != null ? inc._id
-                   : (picked.id.id != null ? picked.id.id : null);
-          if (id != null) onSelectRef.current && onSelectRef.current(id);
-        }
+        // The first incident marker under the cursor wins, even when a
+        // decoration or a blast-radius dot is on top (see pickMarkers). The id
+        // comes from the incident stapled to the entity: the halo and the
+        // severity-5 pulse are separate entities with auto-assigned GUIDs, and
+        // an entity's own id must never reach onSelect.
+        const markers = pickMarkers(viewer, movement.position);
+        const hit = markers.find(e => e._incident);
+        if (hit && hit._incident._id != null) onSelectRef.current && onSelectRef.current(hit._incident._id);
+        // Only a blast-radius dot, decorations (ping, disc, blast rings/arcs,
+        // region fill) or bare globe: keep the current card open. A blast dot
+        // used to select its own GUID, which matched no incident and closed it.
       }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
       viewer._clickHandler = handler;
 
@@ -1254,40 +1276,39 @@ function resolveCoords(inc) {
     // ── Hover tooltip on blast dots ──────────────────────────────────────
     const hoverHandler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
     hoverHandler.setInputAction((movement) => {
-      const picked = viewer.scene.pick(movement.endPosition);
-      if (Cesium.defined(picked) && picked.id) {
-        if (picked.id._blastMeta) {
-          const meta = picked.id._blastMeta;
-          setTooltip({
-            type: "blast",
-            x: movement.endPosition.x,
-            y: movement.endPosition.y,
-            name: meta.name,
-            channel: meta.channel,
-            color: meta.color,
-            country: meta.country,
-            entityType: meta.entityType,
-            incidentName: meta.incidentName,
-          });
-          onHover(null);
-        } else if (picked.id._incident) {
-          const inc = picked.id._incident;
-          const sevColor = SEV_COLOR[inc.severity] || SEV_COLOR[3];
-          setTooltip({
-            type: "incident",
-            x: movement.endPosition.x,
-            y: movement.endPosition.y,
-            name: inc.headline,
-            color: sevColor,
-            category: inc.primary_category || "Classification",
-            locationName: inc.location_name || inc.country || "",
-            severity: inc.severity,
-          });
-          onHover(inc._id);
-        } else {
-          setTooltip(null);
-          onHover(null);
-        }
+      // Front-most marker under the cursor, looking through the decorations
+      // (see pickMarkers), so the selected dot and the dots inside its ping
+      // rings get their tooltip too. A blast dot on top of an incident still
+      // shows its own tooltip, as before.
+      const ent = pickMarkers(viewer, movement.endPosition)[0];
+      if (ent && ent._blastMeta) {
+        const meta = ent._blastMeta;
+        setTooltip({
+          type: "blast",
+          x: movement.endPosition.x,
+          y: movement.endPosition.y,
+          name: meta.name,
+          channel: meta.channel,
+          color: meta.color,
+          country: meta.country,
+          entityType: meta.entityType,
+          incidentName: meta.incidentName,
+        });
+        onHover(null);
+      } else if (ent && ent._incident) {
+        const inc = ent._incident;
+        const sevColor = SEV_COLOR[inc.severity] || SEV_COLOR[3];
+        setTooltip({
+          type: "incident",
+          x: movement.endPosition.x,
+          y: movement.endPosition.y,
+          name: inc.headline,
+          color: sevColor,
+          category: inc.primary_category || "Classification",
+          locationName: inc.location_name || inc.country || "",
+          severity: inc.severity,
+        });
+        onHover(inc._id);
       } else {
         setTooltip(null);
         onHover(null);

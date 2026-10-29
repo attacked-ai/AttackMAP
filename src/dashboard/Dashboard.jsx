@@ -23,7 +23,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAuth } from "../auth/AuthProvider";
 import { SiteNav } from "../auth/SiteNav";
-import { CATEGORY_NAME, INDUSTRIES, ROLES, SECTORS, SEVERITY, isSubscriber, tierLabel } from "../lib/taxonomy";
+import { CATEGORY_NAME, INDUSTRIES, ROLES, SECTORS, SEVERITY, isSubscriber } from "../lib/taxonomy";
 import { loadCounts, loadIncidentDetail, loadIndustry, loadIndustryExtras, loadReportIndex, reportRefFor } from "./data";
 import { incidentImage, incidentPhoto, industryPhoto } from "../lib/images";
 import { applyBroadcastToFrame, readerLicence, prepareReportFrame } from "../lib/reportLock";
@@ -31,7 +31,6 @@ import { frameBroadcast } from "../lib/broadcasts";
 import { useReportBroadcast } from "../lib/useReportBroadcast";
 import { reportHtml } from "../lib/api";
 import { fetchFullReport, fetchReportHtml } from "../lib/reports";
-import { WORKOS } from "../lib/workos";
 import "./dashboard.css";
 
 const DEFAULT_INDUSTRY = "Automotive & EV";
@@ -461,7 +460,7 @@ function ArticleView({ i: incoming, subscriber, back, backLabel, onSubscribe, re
 const openSubscribe = () => { window.location.href = "/?subscribe"; };
 
 export function Dashboard({ initialPage = "dashboard" }) {
-  const { user, tier, profile, loading: authLoading, signOut, setSubscribed, saveProfileBasics } = useAuth();
+  const { user, tier, profile, loading: authLoading, saveProfileBasics } = useAuth();
   const preview = previewParam();
   const subscriber = isSubscriber(tier);
   // The industry comes from the profile row, or — before that row has been
@@ -485,7 +484,9 @@ export function Dashboard({ initialPage = "dashboard" }) {
     setPicked(true); setIndustry(v);
     // The first industry stamps onboarded_at, which sends the welcome email (as the sign-up page does).
     const r = await saveProfileBasics({ industry: v, ...(!profile?.onboarded_at ? { onboarded_at: new Date().toISOString() } : {}) });
-    if (r?.error) {
+    // No error is not enough: an account without a profile row "saves" with
+    // no error but changes nothing, and comes back with no profile.
+    if (r?.error || r?.profile?.industry !== v) {
       // Not saved: back to the example and the picker, and say so.
       setPicked(false); setIndustry(DEFAULT_INDUSTRY); setPickKey((k) => k + 1);
       toast("Could not save your industry. Please try again.", true);
@@ -502,9 +503,9 @@ export function Dashboard({ initialPage = "dashboard" }) {
   const [err, setErr] = useState(null);
   const [reportsReady, setReportsReady] = useState(false);
   useEffect(() => { loadReportIndex().then(() => setReportsReady(true)); }, []);
-  // The shared navbar sits above the app shell, and the profile menu opens just
-  // below the sticky topbar under it. Measured rather than hard-coded, because the
-  // navbar grows a second row on narrow screens.
+  // The shared navbar sits above the app shell, which fills the rest of the
+  // screen. Measured rather than hard-coded, because the navbar grows a second
+  // row on narrow screens.
   const [navH, setNavH] = useState(73);
   useEffect(() => {
     const el = document.querySelector(".dash > header[role='banner']");
@@ -515,30 +516,9 @@ export function Dashboard({ initialPage = "dashboard" }) {
     const ro = new ResizeObserver(set); ro.observe(el);
     return () => ro.disconnect();
   }, []);
-  const [menu, setMenu] = useState(false);
   const [toastMsg, setToastMsg] = useState(null);
   const [toastErr, setToastErr] = useState(false);
   const toast = useCallback((m, err = false) => { setToastErr(err); setToastMsg(m); setTimeout(() => setToastMsg(null), err ? 4200 : 2400); }, []);
-  // The profile menu opens under the profile chip, wherever the chip sits (the
-  // topbar is centred on wide screens, so a fixed right offset drifted away).
-  const [menuRight, setMenuRight] = useState(12);
-  useEffect(() => {
-    if (!menu) return;
-    const b = document.querySelector(".dash .topbar .profile");
-    if (b) setMenuRight(Math.max(12, Math.round(window.innerWidth - b.getBoundingClientRect().right)));
-  }, [menu]);
-  // The open profile menu also closes on Escape, and once the page has
-  // scrolled away from it (on landscape phones the topbar scrolls off while
-  // the fixed menu would stay). A tap outside closes it via .profile-backdrop.
-  useEffect(() => {
-    if (!menu) return;
-    const y0 = window.scrollY;
-    const onKey = (e) => { if (e.key === "Escape") setMenu(false); };
-    const onScroll = () => { if (Math.abs(window.scrollY - y0) > 40) setMenu(false); };
-    window.addEventListener("keydown", onKey);
-    window.addEventListener("scroll", onScroll, { passive: true });
-    return () => { window.removeEventListener("keydown", onKey); window.removeEventListener("scroll", onScroll); };
-  }, [menu]);
 
   useEffect(() => {
     if (!industry) return;
@@ -550,14 +530,13 @@ export function Dashboard({ initialPage = "dashboard" }) {
       .catch((e) => { console.error("[dashboard] industry failed to load:", e); if (!dead) setErr("Could not load your industry right now. Please refresh the page or try again in a few minutes."); });
     return () => { dead = true; };
   }, [industry]);
-  const go = useCallback((p) => { setPage(p); setMenu(false); window.scrollTo({ top: 0, behavior: "smooth" }); }, []);
+  const go = useCallback((p) => { setPage(p); window.scrollTo({ top: 0, behavior: "smooth" }); }, []);
   const openArticle = useCallback((i) => { setLastPage(page); setArticle(i); go("article"); }, [page, go]);
   const name = useMemo(() => {
     const full = profile?.full_name || user?.user_metadata?.full_name || user?.user_metadata?.first_name || "";
     if (full) return full.split(" ")[0];
     return user?.email ? user.email.split("@")[0] : "there";
   }, [profile, user]);
-  const initials = useMemo(() => (profile?.full_name || user?.email || "AI").split(/[\s@]/).slice(0, 2).map((s) => s[0]?.toUpperCase() || "").join("") || "AI", [profile, user]);
 
 
   return (
@@ -568,12 +547,11 @@ export function Dashboard({ initialPage = "dashboard" }) {
           <header className="topbar">
             <div className="search"><svg viewBox="0 0 24 24">{ICONS.search}</svg><input type="search" placeholder="Search incidents, companies or countries…" value={query} onChange={(e) => setQuery(e.target.value)} /><span className="shortcut">⌘ K</span></div>
             <div className="top-spacer" />
+            {/* No account chip here: the site navbar above has the account menu
+                (owner, 2026-10-30). A preview visitor has none there, so the
+                preview keeps its own way out. */}
             {preview && <div className="persona"><span>Preview as</span><select value={industry} onChange={(e) => setIndustry(e.target.value)}>{INDUSTRIES.map((i) => <option key={i} value={i}>{i}</option>)}</select></div>}
-            <button type="button" className="profile" aria-expanded={menu} onClick={() => setMenu(!menu)}>
-              <div className="avatar">{initials}</div>
-              <div className="profile-copy"><strong>{profile?.full_name || user?.email || "Preview"}</strong><span>{tierLabel(tier).toUpperCase()} · {industry}</span></div>
-              <svg viewBox="0 0 24 24"><path d="m7 10 5 5 5-5" /></svg>
-            </button>
+            {preview && <a className="exit-preview" href={user ? "/?dashboard" : "/?home"}>Exit preview</a>}
           </header>
 
           {err && <div className="content"><div className="panel empty" style={{ color: "#B21F31" }}>{err}</div></div>}
@@ -583,17 +561,6 @@ export function Dashboard({ initialPage = "dashboard" }) {
         </main>
       </div>
 
-      {menu && <div className="profile-backdrop" onClick={() => setMenu(false)} aria-hidden="true" />}
-      {menu && (
-        <div className="profile-menu open" style={{ top: navH + 54, right: menuRight }}>
-          <a href="/?profile">Profile</a>
-          {user && WORKOS && <a href="/?profile#security">Login and security</a>}
-          {subscriber && user && tier !== "admin" && <button onClick={async () => { try { await setSubscribed(false); toast("Subscription switched off."); } catch (e) { console.error("[dashboard] switching off the subscription failed:", e); toast("Could not switch off the subscription. Please try again."); } setMenu(false); }}>Switch off subscription</button>}
-          {!subscriber && <button onClick={() => { setMenu(false); openSubscribe(); }}>Subscribe</button>}
-          <a href="/?home">Landing page</a>
-          <button onClick={() => { setMenu(false); user ? signOut() : (window.location.href = "/?home"); }}>{user ? "Sign out" : "Exit preview"}</button>
-        </div>
-      )}
       <div className={`toast ${toastMsg ? "show" : ""} ${toastErr ? "err" : ""}`} role="status" aria-live="polite"><div className="tick">{toastErr ? "!" : "✓"}</div><span>{toastMsg || ""}</span></div>
     </div>
   );

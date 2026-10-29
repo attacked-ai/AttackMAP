@@ -258,7 +258,8 @@ export function AuthProvider({ children }) {
   // Persist the signup form basics onto the profile row. identity.profiles has
   // an own-row UPDATE policy, so this writes only the caller's row. Best-effort
   // — never blocks the sign-in. Returns { profile } on success, { error }
-  // otherwise, for callers that need to know (WorkOS "One last step").
+  // otherwise; { profile: null } means no row came back (the dashboard picker
+  // and the Profile page treat that as "not saved").
   const saveProfileBasics = useCallback(async (fields) => {
     try {
       const { data: u } = await supabase.auth.getUser();
@@ -267,7 +268,9 @@ export function AuthProvider({ children }) {
       const { error } = await supabase.from("profiles").update(fields).eq("id", uid);
       if (error) { console.warn("[Auth] profile basics save failed:", error.message); return { error: "Could not save. Try again." }; }
       const fresh = await fetchProfile(uid);
-      setProfile(fresh);
+      // Nothing read back: keep the profile on screen rather than blanking the
+      // reader's plan, industry and email switch until the next reload.
+      if (fresh) setProfile(fresh);
       return { profile: fresh };
     } catch (err) {
       console.warn("[Auth] profile basics save failed:", err?.message);
