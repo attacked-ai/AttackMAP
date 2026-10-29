@@ -94,6 +94,62 @@
         "false"
       ],
       "port": 5175
+    },
+    {
+      "name": "deploy-check",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "--prefix",
+        "D:/attacked-dev/wt-deploy-resp",
+        "exec",
+        "--",
+        "vite",
+        "preview",
+        "--outDir",
+        "D:/attacked-dev/resp/deploy-check-dist",
+        "--port",
+        "5191",
+        "--strictPort"
+      ],
+      "port": 5191
+    },
+    {
+      "name": "cards-docker",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "--prefix",
+        "D:/attacked-dev/wt-cards",
+        "run",
+        "dev",
+        "--",
+        "--mode",
+        "docker",
+        "--port",
+        "5176",
+        "--strictPort",
+        "--open",
+        "false"
+      ],
+      "port": 5176
+    },
+    {
+      "name": "gcp-merge-docker",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "--prefix",
+        "D:/attacked-dev/wt-gcp-prod",
+        "run",
+        "dev",
+        "--",
+        "--mode",
+        "docker",
+        "--port",
+        "5178",
+        "--strictPort",
+        "--open",
+        "false"
+      ],
+      "port": 5178
     }
   ]
 }

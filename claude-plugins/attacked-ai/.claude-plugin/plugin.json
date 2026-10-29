@@ -1,0 +1,6 @@
+{
+  "name": "attacked-ai",
+  "version": "0.1.0",
+  "description": "Attacked.ai workflow: deploy, Supabase health, edge-function deploys, handoff notes, and guardrails for the project's hard rules.",
+  "author": { "name": "Mohini Awari" }
+}
