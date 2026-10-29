@@ -1,0 +1,11 @@
+{
+  "name": "attacked-tools",
+  "owner": { "name": "Mohini Awari" },
+  "plugins": [
+    {
+      "name": "attacked-ai",
+      "source": "./attacked-ai",
+      "description": "Attacked.ai workflow: deploy, Supabase health, edge-function deploys, handoff notes, project guardrails."
+    }
+  ]
+}
