@@ -252,15 +252,18 @@ const HUB_CSS = `
 @supports (-webkit-touch-callout:none){@media(max-width:560px),(max-height:500px){.hubft .filterbar select,.hubft .filterbar input[type="date"]{font-size:16px!important}.hubft .filterbar select{max-width:100%}}}
 /* "More in X" buttons: a taller hit area, same layout (the margins cancel the padding). */
 .hubft .sh.l button.more{padding-top:12px;padding-bottom:12px;margin-top:-12px;margin-bottom:-12px}
-/* Report view: the Hub's back button and the report frame. */
-.hubft .rf-back{top:12px;left:24px}
-@media(max-width:560px){.hubft .rf-back{left:13px}}
+/* Report view: the Hub's own bar (back to the feed, and the same incident on the
+   Attack Map) above the report frame. A bar of its own rather than buttons laid
+   over the report: the report shells (v3, v4, v5) each draw a different top bar,
+   so anything placed on top of theirs collides with one of them, on phones most
+   of all. Same pattern as the dashboard's report bar. */
+.hubft .rf-bar{height:46px;display:flex;align-items:center;justify-content:space-between;gap:10px;padding:0 24px;background:#FFFFFF;border-bottom:1px solid #E6E3DB;box-sizing:border-box}
+.hubft .rf-map{flex:none;display:inline-flex;align-items:center;gap:6px;min-height:32px;padding:0 14px;background:${GOLD};color:${OB};border:none;border-radius:0;cursor:pointer;font:700 11px/1 Inter,sans-serif;letter-spacing:.08em;text-transform:uppercase;white-space:nowrap}
+.hubft .rf-map:hover{filter:brightness(.95)}
+.hubft .rf-short{display:none}
+@media(max-width:560px){.hubft .rf-bar{padding:0 13px}.hubft .rf-map .rf-long{display:none}.hubft .rf-short{display:inline}}
 @media(max-width:360px){.hubft .rf-long{display:none}}
-/* Centred on the report's 44px reader bar on short landscape screens (reportLock.js).
-   The bar shrinks when the FRAME is <=500px tall, and the frame is the window
-   minus the nav (64px on windows over 500px tall), hence 564px here. */
-@media (orientation:landscape) and (max-height:564px){.hubft .rf-back{top:7px}}
-.hubft .rframe{width:100%;border:none;display:block;height:calc(100vh - var(--nav-h,64px));height:calc(100dvh - var(--nav-h,64px))}
+.hubft .rframe{width:100%;border:none;display:block;height:calc(100vh - var(--nav-h,64px) - 46px);height:calc(100dvh - var(--nav-h,64px) - 46px)}
 /* Related podcast: the episode bar docked at the foot of an open report (src/lib/broadcasts.js). */
 .hubft .rf-bc{position:absolute;left:0;right:0;bottom:0;z-index:21;display:flex;align-items:center;gap:14px;padding:10px 24px;background:rgba(14,17,22,.96);color:#fff;border-top:1px solid #FCBD00;backdrop-filter:blur(6px);font-family:Inter,sans-serif}
 .hubft .rf-bc .k{font:600 10px/1 "JetBrains Mono",ui-monospace,monospace;letter-spacing:.14em;text-transform:uppercase;color:#FCBD00;margin-bottom:4px}
@@ -509,7 +512,7 @@ function ArticleView({ article, onBack, onMap, user }) {
         <div style={{ marginTop: 44, padding: "32px 26px", textAlign: "center", background: OB, borderRadius: 0 }}>
           <div style={{ fontSize: 26, fontWeight: 600, color: "#fff", letterSpacing: "-0.035em" }}>See the blast radius on the map.</div>
           <p style={{ margin: "10px auto 0", maxWidth: 440, fontSize: 13, color: "#A8A8A8", lineHeight: 1.6 }}>Blast radius, adaptive controls and vendor Defence Ratings for this incident — live on the Attack Map.</p>
-          <button onClick={onMap} style={{ marginTop: 18, padding: "12px 26px", background: GOLD, color: OB, border: "none", borderRadius: 0, cursor: "pointer", fontFamily: "Inter, sans-serif", fontSize: 12, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase" }}>{user ? "Open on the map →" : "Sign up to open the map →"}</button>
+          <button onClick={() => onMap()} style={{ marginTop: 18, padding: "12px 26px", background: GOLD, color: OB, border: "none", borderRadius: 0, cursor: "pointer", fontFamily: "Inter, sans-serif", fontSize: 12, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase" }}>{user ? "Open on the map →" : "Sign up to open the map →"}</button>
         </div>
       </div>
     </main>
@@ -605,14 +608,23 @@ function ReportFrame({ article, onBack, onMap, user, profile, subscriber, authRe
   }, [article?.reportRef, subscriber, user?.email, profile, doc, eps]); // doc: the frame mounts only once the API answered
   return (
     <main style={{ background: "#FFFFFF", fontFamily: "Inter, sans-serif", position: "relative" }}>
-      <button className="rf-back" onClick={onBack} style={{
-        position: "absolute", zIndex: 20,
-        display: "inline-flex", alignItems: "center", gap: 6,
-        background: "rgba(255,255,255,0.9)", backdropFilter: "saturate(1.4) blur(6px)",
-        border: "1px solid #D9D6CE", borderRadius: 0, padding: "7px 13px",
-        color: "#3A362E", cursor: "pointer", fontFamily: "Inter, sans-serif",
-        fontSize: 11, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase",
-      }}><span>← Back<span className="rf-long"> to the feed</span></span></button>
+      <div className="rf-bar">
+        <button className="rf-back" onClick={onBack} style={{
+          display: "inline-flex", alignItems: "center", gap: 6, flex: "none",
+          background: "#FFFFFF", border: "1px solid #D9D6CE", borderRadius: 0, padding: "7px 13px",
+          color: "#3A362E", cursor: "pointer", fontFamily: "Inter, sans-serif",
+          fontSize: 11, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase",
+        }}><span>← Back<span className="rf-long"> to the feed</span></span></button>
+        {/* Only for a report about an incident: a standalone report has no dot
+            on the map to open. */}
+        {onMap && (
+          <button type="button" className="rf-map" onClick={() => onMap()}>
+            {user
+              ? <><span className="rf-long">Open this incident on the Attack Map</span><span className="rf-short">On the map</span> →</>
+              : <><span className="rf-long">Sign up to open it on the map</span><span className="rf-short">Sign up</span> →</>}
+          </button>
+        )}
+      </div>
       {doc === undefined ? null : <iframe
         ref={ref}
         {...(doc ? { srcDoc: doc } : { src: `/${PREVIEW_DIR}/${encodeURIComponent(reportRef)}.html` })}
@@ -640,6 +652,18 @@ function reportArticle(r) {
     confidence: null, status: null, reporter: null, data: null,
     _report: r,
   };
+}
+
+// The database incident behind an article, for the Attack Map link: the
+// incident a CMS report is about, or an incident row's own id (pinned baked
+// reports carry theirs as id too). Standalone reports use their ref as id
+// ("ATK-…"), which is not an incident, so they get null.
+function mapIncidentId(a) {
+  if (!a || typeof a !== "object") return null;
+  for (const v of [a._report && a._report.incident_id, a.id]) {
+    if (v != null && /^\d+$/.test(String(v))) return String(v);
+  }
+  return null;
 }
 
 // One incident row → the article shape the Hub renders (list rows and the
@@ -874,8 +898,23 @@ export function AttackHub() {
   useEffect(() => { setPage(0); }, [catFilter, indFilter, dayFilter, dateFrom, dateTo]);
 
   function goToPage(p) { setPage(Math.max(0, Math.min(p, pageCount - 1))); try { window.scrollTo({ top: 0, behavior: "smooth" }); } catch { window.scrollTo(0, 0); } }
-  // "/?map": the bare "/" is the dashboard for a signed-in reader.
-  function openMap() { if (user) window.location.href = "/?map"; else setAuthOpen(true); }
+  // "/?map": the bare "/" is the dashboard for a signed-in reader. Given an
+  // article about an incident, the map opens on that incident with its card
+  // showing: the map's ?incident= deep link looks up the incident's day itself
+  // (no &date=, because a CMS report's own day is its publish date, not the
+  // incident's, and a wrong day would pin the map off the incident).
+  function openMap(a) {
+    if (!user) { setAuthOpen(true); return; }
+    const id = mapIncidentId(a);
+    // So Back from the map reopens this article, not the top of the feed: an
+    // incident by its id (?open=), a standalone report by its ref (?report=).
+    if (a) {
+      const back = /^\d+$/.test(String(a.id)) ? `open=${encodeURIComponent(a.id)}`
+        : (a.reportRef || a.id) ? `report=${encodeURIComponent(a.reportRef || a.id)}` : "";
+      if (back) { try { window.history.replaceState(null, "", `/?hub&${back}`); } catch { /* noop */ } }
+    }
+    window.location.href = id ? `/?map&incident=${encodeURIComponent(id)}` : "/?map";
+  }
   function openArticle(a) { setSelected(a); try { window.scrollTo({ top: 0, behavior: "instant" }); } catch { window.scrollTo(0, 0); } }
 
   // ── card/rail builders (close over openArticle) ──
@@ -1011,8 +1050,8 @@ export function AttackHub() {
         // Resolve the ref at render time: the manifest can arrive after the
         // incident rows did, so the row's own reportRef may still be null.
         (() => { const ref = selected.reportRef || reportByIncident[String(selected.id)] || null; return reportIds && ref && reportIds.has(ref); })()
-          ? <ReportFrame article={{ ...selected, reportRef: selected.reportRef || reportByIncident[String(selected.id)] }} onBack={() => setSelected(null)} onMap={openMap} user={user} profile={profile} subscriber={isSubscriber(tier)} authReady={!authLoading} />
-          : <ArticleView article={selected} onBack={() => setSelected(null)} onMap={openMap} user={user} />
+          ? <ReportFrame article={{ ...selected, reportRef: selected.reportRef || reportByIncident[String(selected.id)] }} onBack={() => setSelected(null)} onMap={mapIncidentId(selected) ? () => openMap(selected) : null} user={user} profile={profile} subscriber={isSubscriber(tier)} authReady={!authLoading} />
+          : <ArticleView article={selected} onBack={() => setSelected(null)} onMap={() => openMap(selected)} user={user} />
       ) : (
         <>
           {/* LIVE TICKER — breaking-news strip of the latest incidents */}
@@ -1279,7 +1318,7 @@ export function AttackHub() {
                               <p>{(decon.severity_rationale || decon.summary || "").slice(0, 280)}</p>
                               <div className="steps"><span className="step"><b>1</b> Entry</span><span className="step"><b>2</b> Spread</span><span className="step"><b>3</b> Impact</span><span className="step"><b>4</b> Blast radius</span></div>
                               <div style={{ marginTop: 20, display: "flex", gap: 10, flexWrap: "wrap" }}>
-                                <button className="btn" onClick={openMap}>Trace it on the map →</button>
+                                <button className="btn" onClick={() => openMap(decon)}>Trace it on the map →</button>
                                 <button className="btn gh" onClick={() => openArticle(decon)}>Read briefing</button>
                               </div>
                             </div>
@@ -1309,7 +1348,7 @@ export function AttackHub() {
                 <div className="cta">
                   <h3>The full picture lives on the map.</h3>
                   <p>Blast radius, adaptive controls and vendor Defence Ratings for every briefing above — free to enter, thirty seconds to sign up.</p>
-                  <button className="btn" style={{ marginTop: 20 }} onClick={openMap}>{user ? "Open the map →" : "Sign up free →"}</button>
+                  <button className="btn" style={{ marginTop: 20 }} onClick={() => openMap()}>{user ? "Open the map →" : "Sign up free →"}</button>
                 </div>
               </>
             )}

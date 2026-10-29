@@ -43,12 +43,10 @@
 .dash .persona select:hover { border-color: var(--line-l3); }
 .dash .persona select:focus { border-color: var(--gold); outline: 0; }
 .dash .persona select option { background: var(--card); color: var(--ink-text); }
-.dash .profile { display: flex; align-items: center; gap: 10px; padding: 5px 8px 5px 6px; margin-left: 4px; cursor: pointer; border-radius: var(--r-sm); border: 1px solid transparent; background: none; text-align: left; transition: .16s var(--ease); }
-.dash .profile:hover { background: var(--card); border-color: var(--line-l); }
-.dash .avatar { width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center; background: var(--ink); border: 1px solid var(--ink); color: var(--gold); font-family: var(--mono); font-size: 12px; font-weight: 600; }
-.dash .profile strong { font-size: 12.5px; font-weight: 600; display: block; color: var(--ink-text); }
-.dash .profile span { font-family: var(--mono); font-size: 10.5px; color: var(--muted-light); display: block; margin-top: 2px; letter-spacing: .04em; }
-.dash .profile svg { width: 14px; height: 14px; stroke: var(--muted-light); fill: none; stroke-width: 2; }
+/* Preview only: the way back out, the same height as the select beside it. */
+.dash .exit-preview { display: inline-flex; align-items: center; flex: 0 0 auto; height: 36px; padding: 0 12px; border: 1px solid var(--line-l2); border-radius: var(--r-sm); background: var(--card); font-size: 12.5px; font-weight: 600; color: var(--ink-text); white-space: nowrap; transition: border-color .16s var(--ease); }
+.dash .exit-preview:hover { border-color: var(--line-l3); color: var(--ink-text); }
+.dash .exit-preview:focus-visible { border-color: var(--gold); outline: 0; }
 .dash .content { padding: 22px 28px 56px; max-width: 1600px; margin: 0 auto; }
 .dash .masthead { border: 0; border-radius: var(--r-md) var(--r-md) 0 0; overflow: hidden; position: relative; background: var(--ink-2); display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(400px, .95fr); margin-bottom: 0; min-height: 320px; color: var(--white); }
 .dash .mast-copy { padding: 34px 36px; display: flex; flex-direction: column; justify-content: center; position: relative; z-index: 2; }
@@ -235,7 +233,6 @@
   .dash .right { grid-template-columns: repeat(auto-fit, minmax(min(340px, 100%), 1fr)); align-items: start; }
   .dash .persona span { display: none; }
   .dash .persona select { max-width: 200px; }
-  .dash .profile .profile-copy { display: none; }
   .dash .search { max-width: 340px; }
   .dash .topbar { gap: 10px; }
 }
@@ -253,7 +250,7 @@
   .dash .mobile-menu { display: grid; place-items: center; }
   .dash .content { padding: 16px 16px 40px; }
   .dash .topbar { padding: 0 12px; gap: 8px; }
-  .dash .shortcut, .dash .profile .profile-copy, .dash .persona { display: none; }
+  .dash .shortcut, .dash .persona { display: none; }
   .dash .mast-copy { padding: 22px 20px 24px; }
   .dash .mast-copy h1 strong { font-size: 34px; }
   .dash .mast-art { min-height: 210px; }
@@ -267,10 +264,10 @@
   .dash .sector-note { margin: 0 12px 12px; }
   .dash .panel-head, .dash .today { padding-left: 16px; padding-right: 16px; }
   .dash .filter-row { padding-left: 16px; padding-right: 16px; }
-  /* Topbar: the search takes all the room the avatar leaves (signed-in
-     accounts too, not only the preview), up to its 340px cap. */
+  /* Topbar: the search takes all the room up to its 340px cap; in the
+     preview, "Exit preview" stays at the right end. */
   .dash .top-spacer { display: none; }
-  .dash .profile { margin-left: auto; }
+  .dash .exit-preview { margin-left: auto; }
 }
 
 /* Phone panel heads: the title and its line get the full width; "N in
@@ -315,14 +312,6 @@
 @media (hover: none){
   .dash .shortcut { display: none; }
 }
-
-/* Profile menu, opened from the avatar in the topbar. `top` is set inline
-   from the measured nav height. */
-.dash .profile-menu { position: fixed; top: calc(var(--nav-h) + var(--topbar-h) - 6px); right: 12px; z-index: 60; width: min(240px, calc(100vw - 24px)); display: grid; gap: 2px; padding: 6px; background: var(--card); border: 1px solid var(--line-l2); border-radius: var(--r-sm); box-shadow: var(--shadow-float); }
-.dash .profile-menu > a, .dash .profile-menu > button { display: flex; align-items: center; width: 100%; min-height: 40px; padding: 0 12px; border: 0; background: transparent; border-radius: var(--r-xs); font-size: 13px; font-weight: 500; color: var(--ink-text); text-align: left; }
-.dash .profile-menu > a:hover, .dash .profile-menu > button:hover { background: var(--canvas-2); color: var(--ink-text); }
-/* Invisible layer under the open menu: a tap anywhere else closes it. */
-.dash .profile-backdrop { position: fixed; inset: 0; z-index: 59; }
 
 /* First-run industry picker. */
 .dash .settings-card { padding: 28px; }
