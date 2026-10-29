@@ -22,3 +22,9 @@ public/reports-blur/
 reports-pdf/
 __pycache__/
 *.pyc
+
+# Personal, generated or backup files: never publish (the repo is public)
+job-search/
+screenshots/
+*.BACKUP-*
+AUDIT_REPORT_*.md
