@@ -2,6 +2,58 @@
 
 ## Production now (read first)
 
+- 2026-10-21 OWNER SAID "deploy". Deploy folder READY: D:/attacked-dev/wt-deploy-resp (detached 2cde5a5, .vercel linked, public/reports =
+  backups/reports-full-2026-10-15 + report patch v4, 310/310 verified). Pre-deploy: production build OK; alive check on the built site
+  (6 pages x 4 devices) = 0 JS errors and equal/better than live on every row (D:/attacked-dev/resp/deploy-check vs deploy-before-live).
+  Vercel env unchanged since Oct 15. First `vercel deploy --prod` died on a Vercel upload 500 (nothing deployed; live still
+  lnbxxqrh0 = 7ba9e7d, bundle index-DzM0NFeC.js); the retry was blocked by auto mode -> OWNER runs:
+  vercel deploy --prod --yes --cwd D:attacked-devwt-deploy-resp   (rollback: vercel promote attackedmap-lnbxxqrh0-mohiawrai2609s-projects.vercel.app --yes --cwd D:attacked-devwt-deploy-resp)
+  After it: re-run the alive check against https://attackedmap.vercel.app and compare with deploy-before-live.
+- 2026-10-20 READY TO DEPLOY (needs owner OK): cards-responsive @2cde5a5 = live 7ba9e7d + all responsive fixes. Whole-site check
+  PASSED (432 visits) and Attack Map check PASSED (all critical/major gone, alive on 19 devices; last minor = 11px phone text, fixed
+  and re-checked). NOT deployed, NOT merged into cards-only-on-live (which also carries the unapproved paywall + 2-step).
+  Deploy from a NEW clean worktree at 2cde5a5 (not wt-deploy: it holds the paywall preview reports) with the FULL baked reports
+  (D:/attacked-dev/backups/reports-full-2026-10-15) + apply/verify-report-responsive. C: drive is at ~0 MB free.
+- 2026-10-19 STATUS FOR THE OWNER: round-2 responsive fixes (cards-responsive 9106cd8) are NOT merged into cards-only-on-live and
+  NOT deployed. Whole-site check after the merge PASSED (wf_b3ab2e38-13d, results D:/attacked-dev/resp/final_verify_results.json
+  once saved). Attack Map check re-run as wf_48a25405-873 (D:/attacked-dev/resp/map_check_wf.js). Live = 7ba9e7d (Oct 15).
+  cards-only-on-live (ea96f93) now also has the paywall + two-step verification, neither approved for live: deploy
+  cards-responsive (live + fixes) only, with the owner's OK; merge cards-responsive into cards-only-on-live later.
+- 2026-10-17: Supabase is back (200). Production = 7ba9e7d (live line; paywall built on cards-only-on-live 7b1fa15 but NOT deployed,
+  owner choosing Design 1/2). Merged 7ba9e7d (NOT the paywall commits) into cards-responsive -> 9106cd8 (one SiteNav conflict,
+  kept both: acct-open class + logo to /?home); builds clean. Final verification run wf_b3ab2e38-13d (restarted 10-17 16:00; wf_487c4640-7c6 died with the session) (D:/attacked-dev/resp/final_verify_wf.js):
+  Attack Map check + whole-site regression check, one refix each. If the PC stops: start a NEW run of that script.
+  Deploying cards-responsive later = responsive fixes on top of exactly what is live (no paywall). Owner wants localhost first.
+- 2026-10-12 PAUSED BY THE OWNER ("continue tomorrow"). TO RESUME: (1) start the local server: preview config `live-resp` in
+  .claude/launch.json (serves D:/attacked-dev/wt-live-resp on :5175); (2) start a NEW run of D:/attacked-dev/resp/map_check_wf.js
+  (Attack Map independent check, refix once if needed); (3) when it passes: merge the latest cards-only-on-live (69e5adb or newer,
+  owned by the WorkOS/GCP sessions) into cards-responsive, re-run the 6-page alive check (D:/attacked-dev/resp/hotfix/pages-alive-all.mjs),
+  ask the owner before any deploy; (4) coordinate getting the fixes onto gcp-production. Everything is committed (7312c0f); the
+  sweep tool blocks Supabase. Supabase was still 402 on 10-12.
+- 2026-10-12 16:05: every device-test fix group PASSED its independent check (globe, nav, admin, dashboard, report, pages) and
+  is saved in commit 7312c0f on cards-responsive (NOT deployed). Only the Attack Map check remains: run wf_b68915fe-a64
+  (script copy D:/attacked-dev/resp/map_check_wf.js; earlier results D:/attacked-dev/resp/fix3_cont_results.json). If the PC
+  stops again: start a NEW run of map_check_wf.js (do not resume the big fix workflow: its cache re-runs finished agents).
+- 2026-10-12: the fix run never completed (session ended). All in-progress fixes are saved as WIP commit 76b5de4 on
+  cards-responsive (NOT deployed, NOT yet checked; alive check passed on 6 pages). Resumed as wf_16ff1a35-bca (fix3_cont_wf.js,
+  doneGroups admin/globe/nav). Supabase still 402 on 10-12 11:00 IST. Owner chose GCP (branch gcp-production from
+  cards-only-on-live): once these fixes pass, they must reach cards-only-on-live / gcp-production too (coordinate with that session).
+- 2026-10-10 RULE: our sweep loops (each map load ~6.8 MB from live Supabase) caused the egress lockout. The sweep tool now blocks
+  every *.supabase.co request (guardSupabase in rtools/sweep.mjs). Never bypass it. Fix workflow continuation wf_f4561e21-a24
+  (script D:/attacked-dev/resp/fix3_cont_wf.js, args doneGroups admin/globe/nav) running; earlier runs died on network outages.
+- 2026-10-09 PEER (WorkOS session): cards-only-on-live is now 5ad2e14 = 25bf26a (owner's nav/footer no-underline CSS) + WorkOS
+  sign-in, dormant unless the build sets VITE_AUTH_PROVIDER=workos (Vercel prod does not). Merge 5ad2e14 (not just 25bf26a) into
+  cards-responsive before our next deploy; verify the sign-in modal is unchanged without the env var. The peer owns
+  localhost:5173 and D:/attacked-dev/wt-cards now: do not touch them. Do not deploy the peer's work on its behalf.
+- 2026-10-09 final device test (fold covers 280/344, unfolded folds 512/882, Surface Duo, iPad mini, monitors) -> confirmed
+  findings `D:/attacked-dev/resp/final2/_confirmed.json` (9 critical incl. crash+Supabase, 7 major, 26 minor). Fix workflow wf_130d0070-95f
+  (script `D:/attacked-dev/resp/fix3_wf.js`) running on cards-responsive (wt-live-resp, :5175). Deploy only with the owner's OK.
+- 2026-10-09 INCIDENT: dc7953a (deployed 10-08 17:15) crashed the Attack Map to a blank page (incidentImage not imported in the
+  live GlobalAttackMap.jsx). Fixed by cdd9b38, deployed 10-09 as attackedmap-c6o1kcplu (verified: map stays up on fold-280,
+  iphone-390, fold5-open, lap-1366). cards-only-on-live fast-forwarded to cdd9b38. Lesson: after any map change, check the map
+  is still on screen 8 s after load (D:/attacked-dev/resp/hotfix/pages.mjs), not only the layout numbers.
+- 2026-10-09 BLOCKER (owner action): Supabase project answers 402 exceed_egress_quota on Auth/REST/Storage: nobody can sign in,
+  the map shows archived data. Upgrade the plan / lift the spend cap, or wait for the quota reset. Our sweeps added egress.
 - https://attackedmap.vercel.app = branch `cards-responsive` @dc7953a (live design + responsive fixes + Hub picture fix + no more
   broken AI-generator pictures), deployment `attackedmap-cdwkvd778`, from the clean worktree `D:/attacked-dev/wt-deploy`.
   Previous: `attackedmap-r5miv34z9` (responsive only, 16:45).
