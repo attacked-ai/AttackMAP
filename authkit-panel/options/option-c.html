@@ -1,0 +1,18 @@
+<style>
+.pc{box-sizing:border-box;position:relative;height:100%;display:flex;flex-direction:column;color:#fff;background:#0E1116;overflow:hidden}
+.pc *{box-sizing:border-box}
+.pc-top{display:flex;align-items:center;gap:10px;padding:40px 56px 0}
+.pc-logo{width:28px;height:28px}
+.pc-mark{font-weight:600;font-size:20px;letter-spacing:-.02em}.pc-mark span{color:#FCBD00}
+.pc-body{flex:1;display:flex;flex-direction:column;justify-content:center;padding:24px 56px}
+.pc-title{margin:0;font-weight:700;font-size:40px;line-height:1.08;letter-spacing:-.03em}
+.pc-title span{color:#FCBD00}
+.pc-qs{margin:34px 0 0;padding:0;list-style:none;max-width:500px;counter-reset:q}
+.pc-qs li{position:relative;padding:20px 0 20px 64px;border-top:1px solid #23282F}
+.pc-qs li:last-child{border-bottom:1px solid #23282F}
+.pc-qs li:before{counter-increment:q;content:"0" counter(q);position:absolute;left:0;top:18px;font-weight:700;font-size:30px;letter-spacing:-.04em;color:#FCBD00;line-height:1}
+.pc-qs h3{margin:0;font-size:20px;font-weight:600;letter-spacing:-.01em}
+.pc-qs p{margin:5px 0 0;font-size:14px;line-height:1.5;color:#A6A8AD}
+.pc-strip{padding:18px 56px;background:#FCBD00;color:#111;font-weight:700;font-size:14px}
+</style>
+<div class="pc"><div class="pc-top"><img class="pc-logo" alt="" src="https://attackedmap.vercel.app/attacked-ai-logo.svg"><span class="pc-mark">Attacked<span>.ai</span></span></div><div class="pc-body"><h2 class="pc-title">The three questions<br>after <span>every incident</span>.</h2><ul class="pc-qs"><li><h3>Are we exposed?</h3><p>Whether it touches your industry, your suppliers or your customers.</p></li><li><h3>Who else is hit?</h3><p>The named companies in the blast radius, not "a vendor was affected".</p></li><li><h3>What do we do first?</h3><p>The GUARD controls that turn an alert into a clear next step.</p></li></ul></div><div class="pc-strip">Built for the people who get the call first.</div></div>
