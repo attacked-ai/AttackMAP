@@ -1,10 +1,13 @@
-// DEPLOYED COPY, for reference only: never built or deployed from here.
-// Supabase project ovenyjguhkgiceddzwna, function welcome-email v5
-// (verify_jwt = false, last deployed 2026-06-18), fetched 2026-09-30.
-// Below this header the file is what runs today: the June "Design Partner"
-// welcome (generic top incidents, Design Partner card, /?pricing links). It is
-// OLDER than ./index.ts (v2, personalised to the sign-up industry, 2026-09-22),
-// which was committed but never deployed. Reconcile by deploying ./index.ts.
+// DEPLOYED COPY of welcome-email (Supabase project ovenyjguhkgiceddzwna,
+// verify_jwt = false: the trigger notify_on_onboarded calls it without a key).
+// ./index.ts beside it is the newer personalised rewrite, not deployed yet.
+// 2026-10-09 audit patch on top of live v6 — until now anyone could call it
+// with any user's id and it mailed that user and returned their address:
+//   * user_id must be a UUID;
+//   * without the service-role key, it only sends to a profile whose
+//     onboarded_at is under 30 minutes old (the trigger fires the moment it is
+//     set), and only once per address (delivery_log kind = 'welcome');
+//   * the response no longer contains the email address.
 
 // welcome-email — Supabase Edge Function (Gmail SMTP backend)
 //
@@ -204,14 +207,50 @@ async function createSmtpClient() {
   return new SMTPClient({ connection: { hostname: "smtp.gmail.com", port: 465, tls: true, auth: { username: GMAIL_USER, password: GMAIL_APP_PASSWORD } } });
 }
 
+
+// Constant-time: compare SHA-256 digests byte by byte.
+const enc = new TextEncoder();
+async function safeEqual(a: string, b: string): Promise<boolean> {
+  const [x, y] = await Promise.all([a, b].map((s) => crypto.subtle.digest("SHA-256", enc.encode(s))));
+  const u = new Uint8Array(x), v = new Uint8Array(y);
+  let diff = 0;
+  for (let i = 0; i < u.length; i++) diff |= u[i] ^ v[i];
+  return diff === 0;
+}
+async function isServiceRole(req: Request): Promise<boolean> {
+  const m = (req.headers.get("authorization") ?? "").match(/^Bearer\s+(\S+)\s*$/i);
+  return !!(SERVICE_KEY && m && await safeEqual(m[1], SERVICE_KEY));
+}
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const WINDOW_MS = 30 * 60 * 1000;
+const reply = (body: unknown, status = 200) =>
+  new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+
+async function logWelcome(email: string, status: string, error: string | null) {
+  await fetch(`${SUPABASE_URL}/rest/v1/delivery_log`, {
+    method: "POST",
+    headers: { apikey: SERVICE_KEY, "Authorization": `Bearer ${SERVICE_KEY}`, "Content-Type": "application/json", Prefer: "return=minimal" },
+    body: JSON.stringify({ kind: "welcome", channel: "email", recipient: email, status, error }),
+  }).catch(() => {});
+}
+
 Deno.serve(async (req) => {
+  const internal = await isServiceRole(req);
   let userId: string | null = null;
   try { const body = await req.json().catch(() => ({})); userId = body?.user_id ?? null; } catch { /* noop */ }
-  if (!userId) return new Response(JSON.stringify({ ok: false, error: "user_id required" }), { status: 400, headers: { "Content-Type": "application/json" } });
+  if (!userId || !UUID_RE.test(String(userId))) return reply({ ok: false, error: "user_id required" }, 400);
 
-  const profiles = await pgFetch(`profiles?id=eq.${userId}&select=email,full_name,industry,watch_industries,watch_categories,digest_frequency,unsubscribe_token&limit=1`);
+  const profiles = await pgFetch(`profiles?id=eq.${userId}&select=email,full_name,industry,watch_industries,watch_categories,digest_frequency,unsubscribe_token,onboarded_at&limit=1`);
   const profile = profiles?.[0];
-  if (!profile) return new Response(JSON.stringify({ ok: false, error: "profile not found" }), { status: 404, headers: { "Content-Type": "application/json" } });
+  if (!profile || !profile.email) return reply({ ok: false, error: "not eligible" }, 404);
+
+  if (!internal) {
+    const onboarded = Date.parse(profile.onboarded_at ?? "");
+    if (!Number.isFinite(onboarded) || Date.now() - onboarded > WINDOW_MS) return reply({ ok: false, error: "not eligible" }, 403);
+    const prior = await pgFetch(`delivery_log?kind=eq.welcome&recipient=eq.${encodeURIComponent(profile.email)}&status=eq.sent&select=id&limit=1`);
+    if (prior?.length) return reply({ ok: true, skipped: "already welcomed" });
+  }
 
   const latest = await pgFetch(`incidents?select=incident_day&order=incident_day.desc&limit=1`);
   const latestDay = latest?.[0]?.incident_day;
@@ -223,7 +262,7 @@ Deno.serve(async (req) => {
 
   let client: SMTPClient;
   try { client = await createSmtpClient(); }
-  catch (err) { return new Response(JSON.stringify({ ok: false, error: (err as Error).message }), { status: 500, headers: { "Content-Type": "application/json" } }); }
+  catch (err) { console.error("[welcome-email]", err); return reply({ ok: false, error: "mail not configured" }, 500); }
 
   try {
     const firstName = (profile.full_name || profile.email || "").split(" ")[0].split("@")[0];
@@ -236,9 +275,12 @@ Deno.serve(async (req) => {
     });
   } catch (err) {
     try { await client.close(); } catch { /* noop */ }
-    return new Response(JSON.stringify({ ok: false, error: (err as Error).message }), { status: 500, headers: { "Content-Type": "application/json" } });
+    console.error("[welcome-email]", err);
+    await logWelcome(profile.email, "failed", String((err as Error)?.message ?? err));
+    return reply({ ok: false, error: "send failed" }, 500);
   }
   try { await client.close(); } catch { /* noop */ }
+  await logWelcome(profile.email, "sent", null);
 
-  return new Response(JSON.stringify({ ok: true, provider: "gmail-smtp", to: profile.email }), { headers: { "Content-Type": "application/json" } });
+  return reply({ ok: true, provider: "gmail-smtp" });
 });

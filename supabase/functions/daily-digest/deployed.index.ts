@@ -1,12 +1,15 @@
-// DEPLOYED COPY, for reference only: never built or deployed from here.
-// Supabase project ovenyjguhkgiceddzwna, function daily-digest v20
-// (verify_jwt = false, last deployed 2026-06-18), fetched 2026-09-30.
-// Below this header the file is what runs today. It is the June "v16/v19
-// Partner" brief, OLDER than ./index.ts (v17 industry-led, 2026-09-22, never
-// deployed). It still selects incidents.if_you_operate_x_then_y (dropped from
-// incidents on 2026-07-28), so PostgREST should reject its incident query, and
-// it only knows the retired "partner" tier. Its pg_cron job is inactive.
-// Reconcile by deploying ./index.ts; nothing here needs keeping.
+// DEPLOYED COPY of daily-digest (Supabase project ovenyjguhkgiceddzwna,
+// verify_jwt = false). ./index.ts beside it is the newer industry-led rewrite,
+// not deployed yet. 2026-10-09 audit patch on top of live v21:
+//   * every call needs the service-role key (Authorization: Bearer <key>).
+//     Until now anyone could mail every subscriber, or call dryRun and get the
+//     list of subscriber addresses and unsubscribe tokens. Nothing calls it on a
+//     schedule today (pg_cron job daily-digest-08-utc is inactive); to schedule
+//     it, the job must send the service-role key.
+//   * the incident query no longer asks for if_you_operate_x_then_y (dropped
+//     2026-07-28), which made every run fail;
+//   * "enterprise" (today's subscriber tier) gets the full brief, like the old
+//     "partner" tier, instead of no brief at all.
 
 // daily-digest — Supabase Edge Function (Gmail SMTP backend)
 // Sends the incident digest to all email_subscribed=true profiles.
@@ -400,7 +403,7 @@ function buildForProfile(p: any, dayIncidents: any[], weekIncidents: any[], targ
   const matched = hasFocus ? pool.filter(matches) : [];
   const rest = hasFocus ? pool.filter((i) => !matches(i)) : pool;
 
-  const isPartner = p.tier === "partner" || p.tier === "admin";
+  const isPartner = p.tier === "partner" || p.tier === "enterprise" || p.tier === "admin";
   const periodLabel = weekly
     ? `${formatDate(weekStart)} – ${formatDate(targetDay)}`
     : formatDate(targetDay);
@@ -419,7 +422,24 @@ function buildForProfile(p: any, dayIncidents: any[], weekIncidents: any[], targ
   return { isPartner, weekly, focus: hasFocus ? focus : "all", matched: matched.length, rest: rest.length, pool: pool.length, subject, html };
 }
 
+// Constant-time: compare SHA-256 digests byte by byte.
+const enc = new TextEncoder();
+async function safeEqual(a: string, b: string): Promise<boolean> {
+  const [x, y] = await Promise.all([a, b].map((s) => crypto.subtle.digest("SHA-256", enc.encode(s))));
+  const u = new Uint8Array(x), v = new Uint8Array(y);
+  let diff = 0;
+  for (let i = 0; i < u.length; i++) diff |= u[i] ^ v[i];
+  return diff === 0;
+}
+async function isServiceRole(req: Request): Promise<boolean> {
+  const m = (req.headers.get("authorization") ?? "").match(/^Bearer\s+(\S+)\s*$/i);
+  return !!(SERVICE_KEY && m && await safeEqual(m[1], SERVICE_KEY));
+}
+
 Deno.serve(async (req) => {
+  if (!await isServiceRole(req)) {
+    return new Response(JSON.stringify({ ok: false, error: "unauthorized" }), { status: 401, headers: { "Content-Type": "application/json" } });
+  }
   let body: any = {};
   try {
     if (req.method === "POST") body = await req.json().catch(() => ({}));
@@ -436,7 +456,7 @@ Deno.serve(async (req) => {
   const force: boolean = body?.force === true;
 
   const weekIncidents: any[] = await pgFetch(
-    `incidents?select=id,headline,summary,entity,sector,industry,country,severity,primary_category,if_you_operate_x_then_y,incident_day` +
+    `incidents?select=id,headline,summary,entity,sector,industry,country,severity,primary_category,incident_day` +
     `&incident_day=gte.${weekStart}&incident_day=lte.${targetDay}` +
     `&latitude=not.is.null&longitude=not.is.null&order=incident_day.asc,severity.desc.nullslast,id.desc&limit=800`,
   );
@@ -448,7 +468,7 @@ Deno.serve(async (req) => {
 
   let profiles: any[] = await pgFetch(
     `profiles?select=id,email,tier,unsubscribe_token,watch_industries,watch_categories,digest_frequency` +
-    `&email_subscribed=eq.true&tier=in.(free,partner,admin)&limit=10000`,
+    `&email_subscribed=eq.true&tier=in.(free,partner,enterprise,admin)&limit=10000`,
   );
   if (onlyTo) profiles = profiles.filter((p) => p.email === onlyTo);
 

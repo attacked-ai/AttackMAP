@@ -13,8 +13,22 @@
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-// Shared secret. Must match INGEST_TOKEN in uploader.html.
-const INGEST_TOKEN = "gi_a7Kd93Lm2Qp8Xt5Rv1Zb6Nf";
+// Shared secret, read from the function's secrets (Supabase dashboard → Edge
+// Functions → Secrets → INGEST_TOKEN). Must match INGEST_TOKEN in uploader.html.
+// Until 2026-10-09 it was written here in the source, which is in a public git
+// repository, so that old value is burnt: set a NEW one. Unset = every call refused.
+const INGEST_TOKEN = (Deno.env.get("INGEST_TOKEN") ?? "").trim();
+const MAX_ROWS = 5000;
+
+// Constant-time: compare SHA-256 digests byte by byte.
+const enc = new TextEncoder();
+async function safeEqual(a: string, b: string): Promise<boolean> {
+  const [x, y] = await Promise.all([a, b].map((s) => crypto.subtle.digest("SHA-256", enc.encode(s))));
+  const u = new Uint8Array(x), v = new Uint8Array(y);
+  let diff = 0;
+  for (let i = 0; i < u.length; i++) diff |= u[i] ^ v[i];
+  return diff === 0;
+}
 
 // Only these tables may be written through the gateway (blast-radius limiter).
 const ALLOWED = new Set([
@@ -36,7 +50,9 @@ Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
   if (req.method !== "POST") return json({ error: "method not allowed" }, 405);
 
-  if (req.headers.get("x-ingest-token") !== INGEST_TOKEN)
+  if (!INGEST_TOKEN) return json({ error: "ingest is not configured" }, 503);
+  const presented = (req.headers.get("x-ingest-token") ?? "").trim();
+  if (!presented || !await safeEqual(presented, INGEST_TOKEN))
     return json({ error: "unauthorized" }, 401);
 
   let payload: { table?: string; rows?: unknown[] };
@@ -47,6 +63,7 @@ Deno.serve(async (req) => {
   if (!table || !ALLOWED.has(table)) return json({ error: "table not allowed: " + table }, 400);
   if (!Array.isArray(rows)) return json({ error: "rows must be an array" }, 400);
   if (rows.length === 0) return json({ data: [] }); // no-op (mirrors uploader's empty-skip)
+  if (rows.length > MAX_ROWS) return json({ error: `at most ${MAX_ROWS} rows per call` }, 413);
 
   const supabase = createClient(
     Deno.env.get("SUPABASE_URL")!,
