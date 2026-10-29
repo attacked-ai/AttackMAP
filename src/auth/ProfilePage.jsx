@@ -124,6 +124,17 @@ export function ProfilePage() {
     if (!loading && !user && typeof window !== "undefined") window.location.href = "/";
   }, [loading, user]);
 
+  // /?profile#work (the dashboard's "Change industry") and the other section
+  // anchors scroll to their section once the page has drawn. #security is
+  // handled by SecurityPanel itself.
+  useEffect(() => {
+    if (loading || !user) return;
+    const id = (window.location.hash || "").slice(1);
+    if (!id || id === "security" || !SECTIONS.some(([s]) => s === id)) return;
+    const t = setTimeout(() => { document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" }); setActive(id); }, 250);
+    return () => clearTimeout(t);
+  }, [loading, user]);
+
   // The section menu follows the scroll.
   useEffect(() => {
     if (typeof IntersectionObserver === "undefined") return;

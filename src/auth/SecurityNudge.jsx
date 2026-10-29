@@ -83,7 +83,7 @@ export function SecurityNudgeFor({ user, loading }) {
       onLater={() => {
         handle(); setShow(false);
         // Back on the page: focus its main heading (or the first link), never <body>.
-        setTimeout(() => { const h = document.querySelector("main h1, main h2, h1, a[href]"); if (h) { if (!h.hasAttribute("tabindex") && !/^(A|BUTTON)$/.test(h.tagName)) h.setAttribute("tabindex", "-1"); h.focus({ preventScroll: true }); } }, 0);
+        setTimeout(() => { const h = document.querySelector(".dash h1, main h1, main h2, h1, a[href]"); if (h) { if (!h.hasAttribute("tabindex") && !/^(A|BUTTON)$/.test(h.tagName)) h.setAttribute("tabindex", "-1"); h.focus({ preventScroll: true }); } }, 0);
       }} />
   );
 }
@@ -113,8 +113,17 @@ export function SecurityPromptScreen({ email, onSetup, onLater }) {
   const boxRef = useRef(null);
   useEffect(() => { try { setupRef.current?.focus({ preventScroll: true }); } catch { /* noop */ } }, []);
   // A modal screen: Tab and Shift+Tab stay on its two buttons, Esc = "Remind me later".
+  // Listened for on the document, so it still works after a click on the
+  // screen's text has moved focus off the buttons.
+  const laterRef = useRef(onLater);
+  laterRef.current = onLater;
+  useEffect(() => {
+    const h = (e) => onKeyDown(e);
+    document.addEventListener("keydown", h, true);
+    return () => document.removeEventListener("keydown", h, true);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const onKeyDown = (e) => {
-    if (e.key === "Escape") { e.preventDefault(); onLater(); return; }
+    if (e.key === "Escape") { e.preventDefault(); laterRef.current(); return; }
     if (e.key !== "Tab") return;
     const f = [...(boxRef.current?.querySelectorAll("button, a[href]") || [])];
     if (!f.length) return;
@@ -123,7 +132,7 @@ export function SecurityPromptScreen({ email, onSetup, onLater }) {
     else if (!e.shiftKey && (i === -1 || i === f.length - 1)) { e.preventDefault(); f[0].focus(); }
   };
   return (
-    <div ref={boxRef} onKeyDown={onKeyDown} role="dialog" aria-modal="true" aria-labelledby="sec-prompt-h" className="sec-prompt" style={{
+    <div ref={boxRef} tabIndex={-1} role="dialog" aria-modal="true" aria-labelledby="sec-prompt-h" className="sec-prompt" style={{
       position: "fixed", inset: 0, zIndex: 9000, display: "flex", background: C.paper, color: C.ink,
       fontFamily: "Inter, sans-serif", WebkitFontSmoothing: "antialiased", overflowY: "auto",
     }}>

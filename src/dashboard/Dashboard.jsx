@@ -31,6 +31,7 @@ import { frameBroadcast } from "../lib/broadcasts";
 import { useReportBroadcast } from "../lib/useReportBroadcast";
 import { reportHtml } from "../lib/api";
 import { fetchFullReport, fetchReportHtml } from "../lib/reports";
+import { WORKOS } from "../lib/workos";
 import "./dashboard.css";
 
 const DEFAULT_INDUSTRY = "Automotive & EV";
@@ -487,7 +488,7 @@ export function Dashboard({ initialPage = "dashboard" }) {
     if (r?.error) {
       // Not saved: back to the example and the picker, and say so.
       setPicked(false); setIndustry(DEFAULT_INDUSTRY); setPickKey((k) => k + 1);
-      toast("Could not save your industry. Please try again.");
+      toast("Could not save your industry. Please try again.", true);
     }
   }, [saveProfileBasics, profile]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { const want = profile?.industry || metaIndustry; if (want && want !== industry) setIndustry(want); }, [profile?.industry, metaIndustry]); // eslint-disable-line
@@ -516,7 +517,16 @@ export function Dashboard({ initialPage = "dashboard" }) {
   }, []);
   const [menu, setMenu] = useState(false);
   const [toastMsg, setToastMsg] = useState(null);
-  const toast = useCallback((m) => { setToastMsg(m); setTimeout(() => setToastMsg(null), 2400); }, []);
+  const [toastErr, setToastErr] = useState(false);
+  const toast = useCallback((m, err = false) => { setToastErr(err); setToastMsg(m); setTimeout(() => setToastMsg(null), err ? 4200 : 2400); }, []);
+  // The profile menu opens under the profile chip, wherever the chip sits (the
+  // topbar is centred on wide screens, so a fixed right offset drifted away).
+  const [menuRight, setMenuRight] = useState(12);
+  useEffect(() => {
+    if (!menu) return;
+    const b = document.querySelector(".dash .topbar .profile");
+    if (b) setMenuRight(Math.max(12, Math.round(window.innerWidth - b.getBoundingClientRect().right)));
+  }, [menu]);
   // The open profile menu also closes on Escape, and once the page has
   // scrolled away from it (on landscape phones the topbar scrolls off while
   // the fixed menu would stay). A tap outside closes it via .profile-backdrop.
@@ -575,16 +585,16 @@ export function Dashboard({ initialPage = "dashboard" }) {
 
       {menu && <div className="profile-backdrop" onClick={() => setMenu(false)} aria-hidden="true" />}
       {menu && (
-        <div className="profile-menu open" style={{ top: navH + 54 }}>
+        <div className="profile-menu open" style={{ top: navH + 54, right: menuRight }}>
           <a href="/?profile">Profile</a>
-          {user && <a href="/?profile#security">Login and security</a>}
+          {user && WORKOS && <a href="/?profile#security">Login and security</a>}
           {subscriber && user && tier !== "admin" && <button onClick={async () => { try { await setSubscribed(false); toast("Subscription switched off."); } catch (e) { console.error("[dashboard] switching off the subscription failed:", e); toast("Could not switch off the subscription. Please try again."); } setMenu(false); }}>Switch off subscription</button>}
           {!subscriber && <button onClick={() => { setMenu(false); openSubscribe(); }}>Subscribe</button>}
           <a href="/?home">Landing page</a>
           <button onClick={() => { setMenu(false); user ? signOut() : (window.location.href = "/?home"); }}>{user ? "Sign out" : "Exit preview"}</button>
         </div>
       )}
-      <div className={`toast ${toastMsg ? "show" : ""}`}><div className="tick">✓</div><span>{toastMsg || ""}</span></div>
+      <div className={`toast ${toastMsg ? "show" : ""} ${toastErr ? "err" : ""}`} role="status" aria-live="polite"><div className="tick">{toastErr ? "!" : "✓"}</div><span>{toastMsg || ""}</span></div>
     </div>
   );
 }

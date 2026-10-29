@@ -36,9 +36,22 @@ const markerScale = (Cesium) => new Cesium.NearFarScalar(1.5e6, 1.15, 4.0e7, 1.0
 // Points are depth-tested against the globe, but a dot just past the horizon
 // lands partly outside the globe's disc, where there is only sky to test
 // against, so half of it showed against space at the edge of the globe. Each
-// marker therefore asks the horizon test (viewer._horizon, refreshed on every
-// preRender in 3D; null in 2D and while morphing, where everything shows).
-const onNearSide = (viewer, position) => { const h = viewer._horizon; return !h || h.isPointVisible(position); };
+// marker therefore shows only while it faces the camera by a small margin
+// (the cosine between the ground's "up" and the line to the camera above
+// HORIZON_MARGIN), read from the current camera on every evaluation. In 2D
+// and while morphing everything shows. The cost is a few multiplications per
+// point per frame; PointVisualizer reads every point property each frame anyway.
+const HORIZON_MARGIN = 0.12;
+const _toCam = { x: 0, y: 0, z: 0 };
+const onNearSide = (viewer, p) => {
+  const Cesium = window.Cesium;
+  if (!Cesium || viewer.scene.mode !== Cesium.SceneMode.SCENE3D) return true;
+  const c = viewer.camera.positionWC;
+  _toCam.x = c.x - p.x; _toCam.y = c.y - p.y; _toCam.z = c.z - p.z;
+  const lc = Math.hypot(_toCam.x, _toCam.y, _toCam.z), lp = Math.hypot(p.x, p.y, p.z);
+  if (!lc || !lp) return true;
+  return (p.x * _toCam.x + p.y * _toCam.y + p.z * _toCam.z) / (lc * lp) > HORIZON_MARGIN;
+};
 
 // Longitude roughly under the user's local timezone (UTC offset × 15°/hour).
 // The globe opens over the user's part of the world, so its day/night state
@@ -879,11 +892,6 @@ function resolveCoords(inc) {
       viewer._clamp2DHandler = viewer.scene.preRender.addEventListener(() => {
         if (viewer.isDestroyed()) return;
         clamp2D(viewer);
-        // The horizon test for the markers (onNearSide), from this frame's camera.
-        if (viewer.scene.mode === Cesium.SceneMode.SCENE3D) {
-          if (!viewer._horizon) viewer._horizon = new Cesium.EllipsoidalOccluder(Cesium.Ellipsoid.WGS84, viewer.camera.positionWC);
-          else viewer._horizon.cameraPosition = viewer.camera.positionWC;
-        } else viewer._horizon = null;
       });
 
       // ── Auto-rotation: rotate globe slowly when user is idle ─────────────
@@ -1175,10 +1183,12 @@ function resolveCoords(inc) {
         };
         // Same ground reference as the incident pin (see the arc note above), so
         // a destination dot sits on the place it refers to at every zoom.
+        const dotPos = Cesium.Cartesian3.fromDegrees(ent.longitude, ent.latitude);
         const dotEnt = viewer.entities.add({
-          position: Cesium.Cartesian3.fromDegrees(ent.longitude, ent.latitude),
+          position: dotPos,
           point: {
-            // Was 18 px with a white outline. Against the new reticle — whose
+            show: new Cesium.CallbackProperty(() => onNearSide(viewer, dotPos), false),   // not past the horizon (see onNearSide)
+            // Was 18 px with a white outline. Against the old reticle — whose
             // visible core is 3 px — an 18 px solid disc made the blast-radius
             // satellites louder than the incident they radiate from. Sized
             // down and given a dark hairline so the hierarchy reads correctly:
