@@ -6,9 +6,10 @@
 -- valid key nothing is written. Child rows arrive with the upstream column
 -- name incident_id, which becomes briefing_id here. Rows replace by primary
 -- key (delete + insert), so a batch can be sent twice without harm.
--- Used for the first load on 2026-10-30; reports.sync_from_vault is the
--- ongoing refresh.
-create or replace function public.report_ingest(p_key text, p_table text, p_rows jsonb)
+-- p_tag comes back in the answer, so the sender can tell which batches
+-- landed. Used for the first load on 2026-10-30; reports.sync_from_vault is
+-- the ongoing refresh.
+create or replace function public.report_ingest(p_key text, p_table text, p_rows jsonb, p_tag text default null)
 returns jsonb
 language plpgsql
 security definer
@@ -26,7 +27,7 @@ begin
   select coalesce(jsonb_agg(case when e ? 'incident_id' then (e - 'incident_id') || jsonb_build_object('briefing_id', e->'incident_id') else e end), '[]'::jsonb)
     into r from jsonb_array_elements(p_rows) e;
   n := jsonb_array_length(r);
-  if n = 0 then return jsonb_build_object('table', p_table, 'rows', 0); end if;
+  if n = 0 then return jsonb_build_object('table', p_table, 'rows', 0, 'tag', p_tag); end if;
 
   case p_table
     when 'reporters' then
@@ -70,8 +71,8 @@ begin
     else
       raise exception 'report_ingest: unknown table %', p_table;
   end case;
-  return jsonb_build_object('table', p_table, 'rows', n);
+  return jsonb_build_object('table', p_table, 'rows', n, 'tag', p_tag);
 end
 $$;
-revoke all on function public.report_ingest(text, text, jsonb) from public;
-grant execute on function public.report_ingest(text, text, jsonb) to anon, authenticated;
+revoke all on function public.report_ingest(text, text, jsonb, text) from public;
+grant execute on function public.report_ingest(text, text, jsonb, text) to anon, authenticated;
