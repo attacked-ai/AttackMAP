@@ -25,7 +25,7 @@ const LIVE = {
   anonKey: process.env.VITE_SUPABASE_ANON_KEY || "sb_publishable_23l5g7MVvgkKuUIctG-e9w_cWYnAtM5",
 };
 const NO_STORE = "private, no-store";
-const PUBLIC_5M = "public, max-age=300, s-maxage=300, stale-while-revalidate=3600";
+const PUBLIC_5M = "public, max-age=60, s-maxage=300, stale-while-revalidate=3600";
 
 function send(res, status, body, { type = "application/json; charset=utf-8", cache = NO_STORE, headers = {} } = {}) {
   res.statusCode = status;
