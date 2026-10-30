@@ -16,8 +16,8 @@ security definer
 set search_path = reports, public
 as $$
 declare
-  r jsonb;
-  n integer;
+  v_rows jsonb;   -- named so they cannot clash with table columns r / n
+  v_n integer;
 begin
   if not exists (
     select 1 from reports.feed_keys k
@@ -25,53 +25,53 @@ begin
   ) then raise exception 'report_ingest: bad key' using errcode = '28000'; end if;
   if p_rows is null or jsonb_typeof(p_rows) <> 'array' then raise exception 'report_ingest: p_rows must be a JSON array'; end if;
   select coalesce(jsonb_agg(case when e ? 'incident_id' then (e - 'incident_id') || jsonb_build_object('briefing_id', e->'incident_id') else e end), '[]'::jsonb)
-    into r from jsonb_array_elements(p_rows) e;
-  n := jsonb_array_length(r);
-  if n = 0 then return jsonb_build_object('table', p_table, 'rows', 0, 'tag', p_tag); end if;
+    into v_rows from jsonb_array_elements(p_rows) e;
+  v_n := jsonb_array_length(v_rows);
+  if v_n = 0 then return jsonb_build_object('table', p_table, 'rows', 0, 'tag', p_tag); end if;
 
   case p_table
     when 'reporters' then
-      delete from reports.reporters where code in (select e->>'code' from jsonb_array_elements(r) e);
-      insert into reports.reporters select * from jsonb_populate_recordset(null::reports.reporters, r);
+      delete from reports.reporters where code in (select e->>'code' from jsonb_array_elements(v_rows) e);
+      insert into reports.reporters select * from jsonb_populate_recordset(null::reports.reporters, v_rows);
     when 'industries' then
-      delete from reports.industries where slug in (select e->>'slug' from jsonb_array_elements(r) e);
-      insert into reports.industries select * from jsonb_populate_recordset(null::reports.industries, r);
+      delete from reports.industries where slug in (select e->>'slug' from jsonb_array_elements(v_rows) e);
+      insert into reports.industries select * from jsonb_populate_recordset(null::reports.industries, v_rows);
     when 'briefings' then
       -- replacing a briefing cascades to its children: send children after briefings
-      delete from reports.briefings where id in (select e->>'id' from jsonb_array_elements(r) e);
+      delete from reports.briefings where id in (select e->>'id' from jsonb_array_elements(v_rows) e);
       insert into reports.briefings select * from jsonb_populate_recordset(null::reports.briefings,
-        (select jsonb_agg(e || jsonb_build_object('synced_at', now())) from jsonb_array_elements(r) e));
+        (select jsonb_agg(e || jsonb_build_object('synced_at', now())) from jsonb_array_elements(v_rows) e));
     when 'blast' then
-      delete from reports.blast where id in (select (e->>'id')::bigint from jsonb_array_elements(r) e);
-      insert into reports.blast select * from jsonb_populate_recordset(null::reports.blast, r);
+      delete from reports.blast where id in (select (e->>'id')::bigint from jsonb_array_elements(v_rows) e);
+      insert into reports.blast select * from jsonb_populate_recordset(null::reports.blast, v_rows);
     when 'sources' then
-      delete from reports.sources where id in (select (e->>'id')::bigint from jsonb_array_elements(r) e);
-      insert into reports.sources select * from jsonb_populate_recordset(null::reports.sources, r);
+      delete from reports.sources where id in (select (e->>'id')::bigint from jsonb_array_elements(v_rows) e);
+      insert into reports.sources select * from jsonb_populate_recordset(null::reports.sources, v_rows);
     when 'vendors' then
-      delete from reports.vendors where id in (select (e->>'id')::bigint from jsonb_array_elements(r) e);
-      insert into reports.vendors select * from jsonb_populate_recordset(null::reports.vendors, r);
+      delete from reports.vendors where id in (select (e->>'id')::bigint from jsonb_array_elements(v_rows) e);
+      insert into reports.vendors select * from jsonb_populate_recordset(null::reports.vendors, v_rows);
     when 'vendor_controls' then
-      delete from reports.vendor_controls where id in (select (e->>'id')::bigint from jsonb_array_elements(r) e);
-      insert into reports.vendor_controls select * from jsonb_populate_recordset(null::reports.vendor_controls, r);
+      delete from reports.vendor_controls where id in (select (e->>'id')::bigint from jsonb_array_elements(v_rows) e);
+      insert into reports.vendor_controls select * from jsonb_populate_recordset(null::reports.vendor_controls, v_rows);
     when 'vendor_logos' then
-      delete from reports.vendor_logos where vendor_id in (select (e->>'vendor_id')::bigint from jsonb_array_elements(r) e);
-      insert into reports.vendor_logos select * from jsonb_populate_recordset(null::reports.vendor_logos, r);
+      delete from reports.vendor_logos where vendor_id in (select (e->>'vendor_id')::bigint from jsonb_array_elements(v_rows) e);
+      insert into reports.vendor_logos select * from jsonb_populate_recordset(null::reports.vendor_logos, v_rows);
     when 'controls' then
-      delete from reports.controls where id in (select (e->>'id')::bigint from jsonb_array_elements(r) e);
-      insert into reports.controls select * from jsonb_populate_recordset(null::reports.controls, r);
+      delete from reports.controls where id in (select (e->>'id')::bigint from jsonb_array_elements(v_rows) e);
+      insert into reports.controls select * from jsonb_populate_recordset(null::reports.controls, v_rows);
     when 'comparables' then
-      delete from reports.comparables where id in (select (e->>'id')::bigint from jsonb_array_elements(r) e);
-      insert into reports.comparables select * from jsonb_populate_recordset(null::reports.comparables, r);
+      delete from reports.comparables where id in (select (e->>'id')::bigint from jsonb_array_elements(v_rows) e);
+      insert into reports.comparables select * from jsonb_populate_recordset(null::reports.comparables, v_rows);
     when 'causes' then
-      delete from reports.causes where id in (select (e->>'id')::bigint from jsonb_array_elements(r) e);
-      insert into reports.causes select * from jsonb_populate_recordset(null::reports.causes, r);
+      delete from reports.causes where id in (select (e->>'id')::bigint from jsonb_array_elements(v_rows) e);
+      insert into reports.causes select * from jsonb_populate_recordset(null::reports.causes, v_rows);
     when 'guard_map' then
-      delete from reports.guard_map where id in (select (e->>'id')::bigint from jsonb_array_elements(r) e);
-      insert into reports.guard_map select * from jsonb_populate_recordset(null::reports.guard_map, r);
+      delete from reports.guard_map where id in (select (e->>'id')::bigint from jsonb_array_elements(v_rows) e);
+      insert into reports.guard_map select * from jsonb_populate_recordset(null::reports.guard_map, v_rows);
     else
       raise exception 'report_ingest: unknown table %', p_table;
   end case;
-  return jsonb_build_object('table', p_table, 'rows', n, 'tag', p_tag);
+  return jsonb_build_object('table', p_table, 'rows', v_n, 'tag', p_tag);
 end
 $$;
 revoke all on function public.report_ingest(text, text, jsonb, text) from public;
