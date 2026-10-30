@@ -22,3 +22,37 @@ public/reports-blur/
 reports-pdf/
 __pycache__/
 *.pyc
+
+# Not product code: notes, one-off SQL, design prototypes, generators, data
+# exports and Claude tooling stay on the local disk only (removed from git 2026-10-30)
+/*.md
+/*.docx
+/*.sql
+/*.cjs
+/*.py
+/*.xlsx
+/*.csv
+/*.bak
+*.bak
+/dashboard-export.html
+/global_attack_map_v4*.jsx
+/landing-map-dots.js
+/landing-preview.html
+/map_data.png
+/peer_watchlist_*
+/hub310_geo_review.*
+/.claude/
+/.video-frames/
+/authkit-panel/
+/claude-plugins/
+/dashboard-industry/
+/docs/
+/email-otp/
+/email-templates-pdf/
+/mfa-test-guide/
+/review/
+/supabase_email_templates/
+supabase/live-apply/
+supabase/migrations.live-applied/
+public/hub-*.html
+public/explainer.md
