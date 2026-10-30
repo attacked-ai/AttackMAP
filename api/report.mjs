@@ -1,4 +1,4 @@
-// api/report.mjs — a published briefing from the incident reporting database,
+// api/report.mjs — a published briefing from the database (schema reports),
 // as a page. A Vercel Node function; the Vite dev server mounts the same
 // handler at /api/report (vite.config.js), so localhost behaves alike.
 //

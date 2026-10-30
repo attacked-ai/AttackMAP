@@ -11,8 +11,8 @@ import report from "./api/report.mjs";
 function reportGate(env) {
   const opts = {
     supabaseUrl: env.VITE_SUPABASE_URL, anonKey: env.VITE_SUPABASE_ANON_KEY,
-    // the incident reporting database, for /api/report (api/report.mjs)
-    incidentUrl: env.INCIDENT_SUPABASE_URL, incidentAnonKey: env.INCIDENT_SUPABASE_ANON_KEY, incidentKey: env.INCIDENT_REPORT_KEY,
+    // the reports schema, for /api/report (api/report.mjs): same database unless REPORTS_* says otherwise
+    reportsUrl: env.REPORTS_SUPABASE_URL, reportsAnonKey: env.REPORTS_SUPABASE_ANON_KEY, reportKey: env.REPORT_FEED_KEY,
   };
   const gate = async (req, res, next) => {
     const d = await decide(req.url || "/", req.headers.authorization, opts);
