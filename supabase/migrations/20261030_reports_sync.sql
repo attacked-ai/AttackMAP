@@ -1,5 +1,7 @@
 -- 20261030_reports_sync.sql — fill and refresh `reports.*` from the incident
 -- reporting project, database to database (dblink), no files in between.
+-- PUBLISHED briefings only (the owner's decision, 2026-10-30): pending and
+-- excluded work stays in the incident project.
 --
 -- Run once after 20261030_reports_schema.sql. Then the copy itself:
 --
@@ -9,10 +11,10 @@
 -- (Connect → Session pooler, "postgresql://postgres.wfnvwtmpvzuxjmebqffq:…").
 -- It is used for the duration of the call only; nothing stores it. Re-run the
 -- same line whenever new briefings are published upstream: rows are upserted
--- by id and rows deleted upstream are removed here. Each run writes a line
--- to reports.sync_log.
+-- by id and rows no longer published upstream are removed here. Each run
+-- writes a line to reports.sync_log.
 --
--- Parts, for a slow link: 'briefings', 'children', 'logos' (94 MB of vendor
+-- Parts, for a slow link: 'briefings', 'children', 'logos' (the vendor
 -- logos; the slowest part), 'reference' (reporters, industries), or 'all'.
 create extension if not exists dblink with schema extensions;
 
@@ -26,6 +28,7 @@ declare
   c jsonb := '{}'::jsonb;
   n bigint;
   log_id bigint;
+  pub constant text := 'select id from public.incidents where report_status = ''published''';
 begin
   insert into reports.sync_log (part) values (p_part) returning id into log_id;
 
@@ -60,7 +63,7 @@ begin
         location_name, location_country, location_lat, location_lng, countries_affected, event_start, event_end, event_tz,
         disclosed_at, assessed_at, entity_legal_name, entity_cik, entity_lei, entity_website, entity_country, entity_hq_city,
         entity_hq_lat, entity_hq_lng, entity_org_key, run_id, writer, writer_saved_at, report_format
-      from public.incidents $q$)
+      from public.incidents where report_status = 'published' $q$)
       as t(id text, industry_slug text, title text, subtitle text, severity integer, confidence text, primary_category text,
            categories text[], status text, created_at timestamptz, updated_at timestamptz, image_url text, disclosed_date date,
            primary_date date, ref text, kicker text, standfirst text, reporter_code text, dek_tail text, cause_tag text,
@@ -96,8 +99,8 @@ begin
       report_format = excluded.report_format, synced_at = now();
     get diagnostics n = row_count; c := c || jsonb_build_object('briefings', n);
 
-    -- briefings removed upstream go here too (children follow by cascade)
-    delete from reports.briefings b where b.id not in (select id from dblink(p_conn, 'select id from public.incidents') as t(id text));
+    -- briefings no longer published upstream go here too (children follow by cascade)
+    delete from reports.briefings b where b.id not in (select id from dblink(p_conn, pub) as t(id text));
     get diagnostics n = row_count; c := c || jsonb_build_object('briefings_removed', n);
   end if;
 
@@ -106,7 +109,7 @@ begin
       website, org_key, exposure_group, entity_type, pathway, timeframe, parent_name, parent_ticker, parent_cik, id_note)
     select * from dblink(p_conn, $q$ select id, incident_id, seq, n, r, sev, d, x, legal_name, ticker, cik, lei, country_code, hq_city,
         hq_lat, hq_lng, website, org_key, exposure_group, entity_type, pathway, timeframe, parent_name, parent_ticker, parent_cik, id_note
-      from public.incident_blast where incident_id in (select id from public.incidents) $q$)
+      from public.incident_blast where incident_id in (select id from public.incidents where report_status = 'published') $q$)
       as t(id bigint, briefing_id text, seq integer, n text, r text, sev integer, d text, x jsonb, legal_name text, ticker text,
            cik text, lei text, country_code text, hq_city text, hq_lat double precision, hq_lng double precision, website text,
            org_key text, exposure_group text, entity_type text, pathway text, timeframe text, parent_name text, parent_ticker text,
@@ -122,7 +125,7 @@ begin
 
     insert into reports.sources (id, briefing_id, seq, t, s, url, publisher, published_on)
     select * from dblink(p_conn, $q$ select id, incident_id, seq, t, s, url, publisher, published_on from public.incident_sources
-      where incident_id in (select id from public.incidents) $q$)
+      where incident_id in (select id from public.incidents where report_status = 'published') $q$)
       as t(id bigint, briefing_id text, seq integer, t text, s text, url text, publisher text, published_on date)
     on conflict (id) do update set briefing_id = excluded.briefing_id, seq = excluded.seq, t = excluded.t, s = excluded.s,
       url = excluded.url, publisher = excluded.publisher, published_on = excluded.published_on;
@@ -131,7 +134,7 @@ begin
 
     insert into reports.vendors (id, briefing_id, seq, n, maker, dom, kind, vtype, prod, rat, map, x)
     select * from dblink(p_conn, $q$ select id, incident_id, seq, n, maker, dom, kind, vtype, prod, rat, map, x from public.incident_vendors
-      where incident_id in (select id from public.incidents) $q$)
+      where incident_id in (select id from public.incidents where report_status = 'published') $q$)
       as t(id bigint, briefing_id text, seq integer, n text, maker text, dom text, kind text, vtype text, prod text, rat text, map text, x jsonb)
     on conflict (id) do update set briefing_id = excluded.briefing_id, seq = excluded.seq, n = excluded.n, maker = excluded.maker,
       dom = excluded.dom, kind = excluded.kind, vtype = excluded.vtype, prod = excluded.prod, rat = excluded.rat, map = excluded.map, x = excluded.x;
@@ -140,7 +143,8 @@ begin
 
     insert into reports.vendor_controls (id, vendor_id, seq, ac, t)
     select * from dblink(p_conn, $q$ select c.id, c.vendor_id, c.seq, c.ac, c.t from public.incident_vendor_controls c
-      join public.incident_vendors v on v.id = c.vendor_id $q$)
+      join public.incident_vendors v on v.id = c.vendor_id
+      where v.incident_id in (select id from public.incidents where report_status = 'published') $q$)
       as t(id bigint, vendor_id bigint, seq integer, ac text, t text)
     on conflict (id) do update set vendor_id = excluded.vendor_id, seq = excluded.seq, ac = excluded.ac, t = excluded.t;
     get diagnostics n = row_count; c := c || jsonb_build_object('vendor_controls', n);
@@ -148,7 +152,7 @@ begin
 
     insert into reports.controls (id, briefing_id, seq, code, cat, name, owner, obj, fail, good, x, mc_id, subcat, mc_confidence, mc_why)
     select * from dblink(p_conn, $q$ select id, incident_id, seq, code, cat, name, owner, obj, fail, good, x, mc_id, subcat, mc_confidence, mc_why
-      from public.incident_controls where incident_id in (select id from public.incidents) $q$)
+      from public.incident_controls where incident_id in (select id from public.incidents where report_status = 'published') $q$)
       as t(id bigint, briefing_id text, seq integer, code text, cat text, name text, owner text, obj text, fail text, good text, x jsonb,
            mc_id text, subcat text, mc_confidence text, mc_why text)
     on conflict (id) do update set briefing_id = excluded.briefing_id, seq = excluded.seq, code = excluded.code, cat = excluded.cat,
@@ -159,7 +163,7 @@ begin
 
     insert into reports.comparables (id, briefing_id, seq, case_name, year, what, implication, x)
     select * from dblink(p_conn, $q$ select id, incident_id, seq, case_name, year, what, implication, x from public.incident_comparables
-      where incident_id in (select id from public.incidents) $q$)
+      where incident_id in (select id from public.incidents where report_status = 'published') $q$)
       as t(id bigint, briefing_id text, seq integer, case_name text, year text, what text, implication text, x jsonb)
     on conflict (id) do update set briefing_id = excluded.briefing_id, seq = excluded.seq, case_name = excluded.case_name,
       year = excluded.year, what = excluded.what, implication = excluded.implication, x = excluded.x;
@@ -168,7 +172,7 @@ begin
 
     insert into reports.causes (id, briefing_id, seq, tier, hyp, rat, why, cats, bp, cmp, guard, x)
     select * from dblink(p_conn, $q$ select id, incident_id, seq, tier, hyp, rat, why, cats, bp, cmp, guard, x from public.incident_causes
-      where incident_id in (select id from public.incidents) $q$)
+      where incident_id in (select id from public.incidents where report_status = 'published') $q$)
       as t(id bigint, briefing_id text, seq integer, tier text, hyp text, rat text, why text, cats jsonb, bp jsonb, cmp jsonb, guard jsonb, x jsonb)
     on conflict (id) do update set briefing_id = excluded.briefing_id, seq = excluded.seq, tier = excluded.tier, hyp = excluded.hyp,
       rat = excluded.rat, why = excluded.why, cats = excluded.cats, bp = excluded.bp, cmp = excluded.cmp, guard = excluded.guard, x = excluded.x;
@@ -177,7 +181,7 @@ begin
 
     insert into reports.guard_map (id, briefing_id, seq, cat, subcat, role, confidence, why, mapped_by, mapped_at)
     select * from dblink(p_conn, $q$ select id, incident_id, seq, cat, subcat, role, confidence, why, mapped_by, mapped_at
-      from public.incident_guard_map where incident_id in (select id from public.incidents) $q$)
+      from public.incident_guard_map where incident_id in (select id from public.incidents where report_status = 'published') $q$)
       as t(id bigint, briefing_id text, seq integer, cat text, subcat text, role text, confidence text, why text, mapped_by text, mapped_at timestamptz)
     on conflict (id) do update set briefing_id = excluded.briefing_id, seq = excluded.seq, cat = excluded.cat, subcat = excluded.subcat,
       role = excluded.role, confidence = excluded.confidence, why = excluded.why, mapped_by = excluded.mapped_by, mapped_at = excluded.mapped_at;
@@ -187,7 +191,8 @@ begin
 
   if p_part in ('all', 'logos') then
     insert into reports.vendor_logos (vendor_id, logo)
-    select * from dblink(p_conn, $q$ select l.vendor_id, l.logo from public.vendor_logos l join public.incident_vendors v on v.id = l.vendor_id $q$)
+    select * from dblink(p_conn, $q$ select l.vendor_id, l.logo from public.vendor_logos l join public.incident_vendors v on v.id = l.vendor_id
+      where v.incident_id in (select id from public.incidents where report_status = 'published') $q$)
       as t(vendor_id bigint, logo text)
     on conflict (vendor_id) do update set logo = excluded.logo;
     get diagnostics n = row_count; c := c || jsonb_build_object('vendor_logos', n);
