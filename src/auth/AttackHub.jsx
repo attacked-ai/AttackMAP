@@ -565,7 +565,7 @@ const PREVIEW_DIR = (() => {
   try { return new URLSearchParams(window.location.search).get("design") === "blur" ? "reports-blur" : "reports"; } catch { return "reports"; }
 })();
 
-function ReportFrame({ article, onBack, onMap, user, profile, subscriber, authReady }) {
+function ReportFrame({ article, onBack, onMap, user, profile, subscriber, authReady, dbOnly = false }) {
   const ref = useRef(null);
   const reportRef = article.reportRef || article.id;
   // Where the HTML comes from, in order:
@@ -628,7 +628,14 @@ function ReportFrame({ article, onBack, onMap, user, profile, subscriber, authRe
           </button>
         )}
       </div>
-      {doc === undefined ? null : <iframe
+      {doc === undefined ? null : (!doc && dbOnly) ? (
+        // A database report with no baked file and no answer from /api/report:
+        // nothing to frame. The usual cause is a short outage of the
+        // incident database; the reader can simply try again.
+        <div className="rframe" style={{ display: "flex", alignItems: "center", justifyContent: "center", padding: "48px 24px", color: "#4A463E", fontSize: 15, lineHeight: 1.6, textAlign: "center" }}>
+          This briefing could not be loaded just now. Please try again in a moment.
+        </div>
+      ) : <iframe
         ref={ref}
         {...(doc ? { srcDoc: doc } : { src: `/${PREVIEW_DIR}/${encodeURIComponent(reportRef)}.html` })}
         title={article.headline || article.id}
@@ -738,6 +745,7 @@ export function AttackHub() {
   // by /api/report (src/lib/reportsDb.js). The Intelligence library below
   // lists them; an incident whose headline matches one opens it as its report.
   const [dbReports, setDbReports] = useState([]);
+  const [bakedRefs, setBakedRefs] = useState(() => new Set());   // refs with a baked file (manifest.json)
   const [libInd, setLibInd] = useState("ALL");
   const [libQ, setLibQ] = useState("");
   const [libPage, setLibPage] = useState(0);
@@ -763,6 +771,7 @@ export function AttackHub() {
       setReportByIncident({ ...baked.byIncident, ...cmsByIncident });
       setCmsReports(rows);
       setDbReports(db);
+      setBakedRefs(new Set(baked.refs));
     })();
     return () => { cancelled = true; };
   }, []);
@@ -1088,7 +1097,11 @@ export function AttackHub() {
         // Resolve the ref at render time: the manifest can arrive after the
         // incident rows did, so the row's own reportRef may still be null.
         (() => { const ref = selected.reportRef || reportByIncident[String(selected.id)] || null; return reportIds && ref && reportIds.has(ref); })()
-          ? <ReportFrame article={{ ...selected, reportRef: selected.reportRef || reportByIncident[String(selected.id)] }} onBack={() => setSelected(null)} onMap={mapIncidentId(selected) ? () => openMap(selected) : null} user={user} profile={profile} subscriber={isSubscriber(tier)} authReady={!authLoading} />
+          ? (() => {
+              const rref = selected.reportRef || reportByIncident[String(selected.id)];
+              const dbOnly = !bakedRefs.has(rref) && dbReports.some(r => r && r.ref === rref);
+              return <ReportFrame article={{ ...selected, reportRef: rref }} onBack={() => setSelected(null)} onMap={mapIncidentId(selected) ? () => openMap(selected) : null} user={user} profile={profile} subscriber={isSubscriber(tier)} authReady={!authLoading} dbOnly={dbOnly} />;
+            })()
           : <ArticleView article={selected} onBack={() => setSelected(null)} onMap={() => openMap(selected)} user={user} />
       ) : (
         <>
