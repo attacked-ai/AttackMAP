@@ -3,12 +3,17 @@ import react from "@vitejs/plugin-react";
 import { FULL_PREFIX, PREVIEW_PREFIX, decide } from "./src/lib/reportGate.js";
 import reportPdf from "./api/report-pdf.mjs";
 import broadcasts from "./api/broadcasts.mjs";
+import report from "./api/report.mjs";
 
 // The subscriber gate for /reports-full/ on the dev and preview servers — the
 // same decision middleware.js makes on Vercel, so localhost shows exactly
 // what a free reader or a subscriber gets on the live site.
 function reportGate(env) {
-  const opts = { supabaseUrl: env.VITE_SUPABASE_URL, anonKey: env.VITE_SUPABASE_ANON_KEY };
+  const opts = {
+    supabaseUrl: env.VITE_SUPABASE_URL, anonKey: env.VITE_SUPABASE_ANON_KEY,
+    // the incident reporting database, for /api/report (api/report.mjs)
+    incidentUrl: env.INCIDENT_SUPABASE_URL, incidentAnonKey: env.INCIDENT_SUPABASE_ANON_KEY, incidentKey: env.INCIDENT_REPORT_KEY,
+  };
   const gate = async (req, res, next) => {
     const d = await decide(req.url || "/", req.headers.authorization, opts);
     if (d.action === "pass") return next();
@@ -22,10 +27,12 @@ function reportGate(env) {
   const pdf = (req, res, next) => (String(req.url || "").split("?")[0] === "/api/report-pdf" ? reportPdf(req, res) : next());
   // The broadcast episodes of a briefing, the same handler Vercel runs (api/broadcasts.mjs).
   const bc = (req, res, next) => (String(req.url || "").split("?")[0] === "/api/broadcasts" ? broadcasts(req, res, opts) : next());
+  // A briefing from the incident reporting database, the same handler Vercel runs (api/report.mjs).
+  const rp = (req, res, next) => (String(req.url || "").split("?")[0] === "/api/report" ? report(req, res, opts) : next());
   return {
     name: "attacked-report-gate",
-    configureServer(server) { server.middlewares.use(pdf); server.middlewares.use(bc); server.middlewares.use(gate); },
-    configurePreviewServer(server) { server.middlewares.use(pdf); server.middlewares.use(bc); server.middlewares.use(gate); },
+    configureServer(server) { server.middlewares.use(pdf); server.middlewares.use(bc); server.middlewares.use(rp); server.middlewares.use(gate); },
+    configurePreviewServer(server) { server.middlewares.use(pdf); server.middlewares.use(bc); server.middlewares.use(rp); server.middlewares.use(gate); },
   };
 }
 

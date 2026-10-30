@@ -12,12 +12,13 @@
 // that array, so it grows with the data. Clicking any incident opens the full
 // briefing in-hub (ArticleView) — no navigation away. CTAs route to the map.
 // ─────────────────────────────────────────────────────────────────────────
-import React, { useEffect, useState, useRef } from "react";
+import React, { useEffect, useState, useRef, useMemo } from "react";
 import { supabase } from "../lib/supabaseClient";
 import { isSubscriber } from "../lib/taxonomy";
 import { applyBroadcastToFrame, prepareReportFrame, readerLicence } from "../lib/reportLock";
 import { reportHtml } from "../lib/api";
 import { fetchFullReport, fetchReportHtml, listPublishedReports } from "../lib/reports";
+import { fetchDbReportHtml, listDbReports, normTitle } from "../lib/reportsDb";
 import { formatDuration, frameBroadcast, isAudioFile } from "../lib/broadcasts";
 import { useReportBroadcast } from "../lib/useReportBroadcast";
 import { useAuth } from "./AuthProvider";
@@ -584,6 +585,8 @@ function ReportFrame({ article, onBack, onMap, user, profile, subscriber, authRe
     (async () => {
       let html = null;
       try { html = await fetchReportHtml(reportRef); } catch { /* not a CMS report */ }
+      // the incident reporting database (api/report.mjs): full for a subscriber, preview otherwise
+      if (!html) { try { html = await fetchDbReportHtml(reportRef); } catch { /* not a database report */ } }
       if (!html) { try { html = await reportHtml(reportRef); } catch { /* API off or refused */ } }
       if (!html && subscriber) html = await fetchFullReport(reportRef);
       if (!dead) setDoc(html || null);
@@ -731,6 +734,13 @@ export function AttackHub() {
   // (manifest.json "featured"), so a briefing is not lost deep in the feed
   // once newer incidents push its incident card down.
   const [featuredReports, setFeaturedReports] = useState([]);
+  // The incident reporting database: every published briefing, rendered live
+  // by /api/report (src/lib/reportsDb.js). The Intelligence library below
+  // lists them; an incident whose headline matches one opens it as its report.
+  const [dbReports, setDbReports] = useState([]);
+  const [libInd, setLibInd] = useState("ALL");
+  const [libQ, setLibQ] = useState("");
+  const [libPage, setLibPage] = useState(0);
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -744,15 +754,43 @@ export function AttackHub() {
       } catch { /* no manifest — the CMS alone still works */ }
       let rows = [];
       try { rows = await listPublishedReports({ limit: 1000 }); } catch { /* CMS unreachable — the baked files alone still work */ }
+      let db = [];
+      try { db = await listDbReports(); } catch { /* API off — baked files and CMS alone still work */ }
       if (cancelled) return;
       const cmsByIncident = {};
       for (const row of rows) if (row && row.incident_id != null && row.ref) cmsByIncident[String(row.incident_id)] = row.ref;
-      setReportIds(new Set([...baked.refs, ...rows.map(r => r && r.ref).filter(Boolean)]));
+      setReportIds(new Set([...baked.refs, ...rows.map(r => r && r.ref).filter(Boolean), ...db.map(r => r && r.ref).filter(Boolean)]));
       setReportByIncident({ ...baked.byIncident, ...cmsByIncident });
       setCmsReports(rows);
+      setDbReports(db);
     })();
     return () => { cancelled = true; };
   }, []);
+
+  // Pair database reports with the Hub's incidents by headline (the same rule
+  // scripts/build-report-manifest.cjs used for the baked files), so an
+  // incident card opens its briefing and a library card can reach the map.
+  // Existing pairings (manifest, CMS) win.
+  const dbByTitle = useMemo(() => {
+    const m = new Map();
+    for (const r of dbReports) if (r && r.ref && r.title) m.set(normTitle(r.title), r.ref);
+    return m;
+  }, [dbReports]);
+  useEffect(() => {
+    if (!dbByTitle.size || !articles.length) return;
+    const add = {};
+    for (const a of articles) {
+      if (!a || a.id == null || a.reportRef) continue;
+      const ref = dbByTitle.get(normTitle(a.headline));
+      if (ref) add[String(a.id)] = ref;
+    }
+    if (Object.keys(add).length) setReportByIncident(prev => ({ ...add, ...prev }));
+  }, [dbByTitle, articles]);
+  const dbIncidentByRef = useMemo(() => {
+    const m = {};
+    for (const [id, ref] of Object.entries(reportByIncident)) if (!(ref in m)) m[ref] = id;
+    return m;
+  }, [reportByIncident]);
 
   useEffect(() => {
     let cancelled = false;
@@ -848,14 +886,14 @@ export function AttackHub() {
     let want = null;
     try { want = new URLSearchParams(window.location.search).get("report"); } catch { /* noop */ }
     if (!want) { didReportOpen.current = true; return; }
-    if (!cmsReports.length && !articles.length) return;   // wait for an index
-    const row = cmsReports.find(r => r && r.ref === want);
+    if (!cmsReports.length && !dbReports.length && !articles.length) return;   // wait for an index
+    const row = cmsReports.find(r => r && r.ref === want) || dbReports.find(r => r && r.ref === want);
     const baked = row ? null : articles.find(x => x.reportRef === want);   // a baked briefing's ref (the PDF's QR code)
     const target = row ? reportArticle(row) : baked;
     if (!target && !(cmsReports.length && articles.length)) return;   // the other index may still name it
     didReportOpen.current = true;
     if (target) { setSelected(target); try { window.scrollTo({ top: 0, behavior: "instant" }); } catch { window.scrollTo(0, 0); } }
-  }, [cmsReports, articles]);
+  }, [cmsReports, dbReports, articles]);
 
   const cats = ["ALL", ...Array.from(new Set(articles.map(a => a.primary_category).filter(Boolean)))];
   const inds = ["ALL", ...Array.from(new Set(articles.map(a => a.industry).filter(Boolean))).sort()];
@@ -1298,6 +1336,53 @@ export function AttackHub() {
                         </div>
                       </section>
                     )}
+
+                    {/* INTELLIGENCE LIBRARY — every published briefing in the
+                        incident reporting database (src/lib/reportsDb.js),
+                        filtered by industry and search, 24 to a page. A card
+                        opens the briefing through ReportFrame (full for a
+                        subscriber, preview otherwise). Reports the CMS also
+                        publishes under the same ref are left to the CMS. */}
+                    {dbReports.length > 0 && (() => {
+                      const cmsRefs = new Set(cmsReports.map(r => r && r.ref).filter(Boolean));
+                      const q = normTitle(libQ);
+                      const libInds = ["ALL", ...Array.from(new Set(dbReports.map(r => r && r.industry).filter(Boolean))).sort()];
+                      const rows = dbReports
+                        .filter(r => r && r.ref && !cmsRefs.has(r.ref))
+                        .filter(r => libInd === "ALL" || r.industry === libInd)
+                        .filter(r => !q || normTitle(`${r.title} ${r.subtitle} ${r.entity || ""} ${r.ticker || ""} ${r.ref}`).includes(q))
+                        .map(r => (dbIncidentByRef[r.ref] ? { ...r, incident_id: dbIncidentByRef[r.ref] } : r));
+                      const PER = 24;
+                      const pages = Math.max(1, Math.ceil(rows.length / PER));
+                      const page = Math.min(libPage, pages - 1);
+                      const slice = rows.slice(page * PER, page * PER + PER);
+                      return (
+                        <section className="reports sec" style={{ marginTop: 24, padding: "42px 0" }} aria-label="Intelligence library">
+                          <div className="wrap">
+                            <div className="sh l">
+                              <span className="sq" style={{ background: GOLD }} /><h2>Intelligence library</h2>
+                              <span className="by" style={{ marginLeft: "auto" }}>{rows.length.toLocaleString()} of {dbReports.length.toLocaleString()} briefings</span>
+                            </div>
+                            <div className="filterbar" style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center", margin: "0 0 22px" }}>
+                              <select className={libInd !== "ALL" ? "act" : ""} value={libInd} onChange={e => { setLibInd(e.target.value); setLibPage(0); }} aria-label="Industry">
+                                {libInds.map(i => <option key={i} value={i}>{i === "ALL" ? "All industries" : i}</option>)}
+                              </select>
+                              <input type="search" value={libQ} onChange={e => { setLibQ(e.target.value); setLibPage(0); }}
+                                placeholder="Search briefings: company, title, reference" aria-label="Search briefings"
+                                style={{ flex: "1 1 260px", minWidth: 0, padding: "7px 11px", border: "1px solid var(--line)", borderRadius: 0, fontFamily: "inherit", fontSize: 12.5, color: "var(--ink)", background: "#fff", outline: "none" }} />
+                            </div>
+                            {slice.length ? <div className="an3">{slice.map(ReportCard)}</div> : <p className="by">No briefing matches.</p>}
+                            {pages > 1 && (
+                              <div className="pager">
+                                <button type="button" onClick={() => setLibPage(Math.max(0, page - 1))} disabled={page === 0}>‹ Previous</button>
+                                <span className="by">Page {page + 1} of {pages}</span>
+                                <button type="button" onClick={() => setLibPage(Math.min(pages - 1, page + 1))} disabled={page >= pages - 1}>Next ›</button>
+                              </div>
+                            )}
+                          </div>
+                        </section>
+                      );
+                    })()}
 
                     {analysis.length > 0 && (
                       <section className="analysis sec" style={{ marginTop: 48, padding: "42px 0" }}>

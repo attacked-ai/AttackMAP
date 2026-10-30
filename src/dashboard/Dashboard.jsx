@@ -31,6 +31,7 @@ import { frameBroadcast } from "../lib/broadcasts";
 import { useReportBroadcast } from "../lib/useReportBroadcast";
 import { reportHtml } from "../lib/api";
 import { fetchFullReport, fetchReportHtml } from "../lib/reports";
+import { fetchDbReportHtml } from "../lib/reportsDb";
 import "./dashboard.css";
 
 const DEFAULT_INDUSTRY = "Automotive & EV";
@@ -305,7 +306,8 @@ function ReportFrame({ i, reportRef, subscriber, onSubscribe, readerName, reader
     // CMS report (hub_reports, via src/lib/reports.js; the database hands a
     // free reader the preview) → API → full file (subscribers) → preview.
     fetchReportHtml(reportRef)
-      .then((cms) => cms || reportHtml(reportRef))
+      .then((cms) => cms || fetchDbReportHtml(reportRef))   // the incident reporting database, lock applied server-side
+      .then((html) => html || reportHtml(reportRef))
       .then((html) => html || (subscriber ? fetchFullReport(reportRef) : null))
       .then((html) => { if (!dead) setDoc(html || null); })
       .catch(() => { if (!dead) setDoc(null); });
