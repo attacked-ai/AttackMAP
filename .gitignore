@@ -64,3 +64,4 @@ supabase/live-apply/
 /supabase_email_templates/
 public/hub-*.html
 public/explainer.md
+*.bak
